@@ -1,15 +1,18 @@
 {
   "expo": {
-    "name": "later-me",
+    "name": "Later Me",
     "slug": "later-me",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0B0B10",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yuvraj.laterme"
     },
     "android": {
+      "package": "com.yuvraj.laterme",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/android-icon-foreground.png",
