@@ -78,9 +78,11 @@ Three tabs: **Home · Quests · Attention**.
 
 ## Roasts and tone
 
-Roast pools are indexed by sarcasm level × escalation tier, template-filled from the focus quest
-(title, current task, task estimate, deadline, projected finish) and today's usage (minutes,
-opens). One rule from Questify governs every line: describe what the user did, never who they are
+Roast pools are indexed by sarcasm level × escalation tier, plus one daily-limit pool per level.
+They are template-filled from the focus quest's stable facts (title, current task, task estimate,
+deadline); days left, session minutes and today's minutes are filled by the watcher when the
+callout fires, so a callout never quotes a stale number while the app is closed. Projected finish
+appears in the app, not in callouts. One rule from Questify governs every line: describe what the user did, never who they are
 — no insults, no "wasted potential". Existing lines that break it are rewritten. With no quest,
 lines fall back to usage-only copy.
 

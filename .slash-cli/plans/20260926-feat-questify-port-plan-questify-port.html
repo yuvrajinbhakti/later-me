@@ -50,6 +50,28 @@
   <li>Before writing Expo code, consult the SDK 57 docs (repo <code>AGENTS.md</code> rule).</li>
 </ul>
 
+<h2>Data flow</h2>
+<pre><code>  screens ──dispatch──▶ reducer (quests.ts ops) ──▶ AppState
+                                                  │
+                         ┌────────────────────────┼─────────────────────────┐
+                         ▼                        ▼                         ▼
+                 saveAppState()          syncWatcher() (dedupes)      screens re-render
+                 AsyncStorage v2         │ config changed / not running → startWatcher(config, tiers)
+                                         │ only roasts changed          → setRoasts(tiers)
+                                         │ alerts off                   → stopWatcher()
+                                         ▼
+                               native Prefs (config, roasts, pause, alertsEnabled, dailyLimitFiredDay)
+                                         │
+      BootReceiver ──(alertsEnabled)──▶ WatcherService ── every 5s ──▶ WatcherSession (state)
+                                         │                               │
+                                         │        TriggerPolicy.decide(input) → NONE | CONTINUOUS | DAILY_LIMIT
+                                         │        TriggerPolicy.delivery(level, canOverlay) → OVERLAY | NOTIFICATION
+                                         ▼
+                               overlay (normal/savage) or notification (gentle / no overlay permission)
+
+  Attention screens ──▶ useUsageSnapshot ──getUsageEvents──▶ native ──▶ buildSnapshot() (usage.ts)
+                        (14 days on focus, today-only every 30s)</code></pre>
+
 <h2>File structure</h2>
 <table>
 <tr><th>Path</th><th>Responsibility</th></tr>
@@ -67,6 +89,9 @@
 <tr><td><code>src/features/attention/useUsageSnapshot.ts</code>, <code>src/features/permissions/usePermissions.ts</code></td><td>Hooks bridging native queries into screens</td></tr>
 <tr><td><code>src/app/**</code></td><td>Expo Router routes (thin screens)</td></tr>
 <tr><td><code>modules/usage-stats/android/.../TriggerPolicy.kt</code></td><td>Pure trigger + delivery decisions</td></tr>
+<tr><td><code>modules/usage-stats/android/.../WatcherSession.kt</code></td><td>Pure session state: continuous time, session triggers, cooldown, dismiss / leave / callout transitions</td></tr>
+<tr><td><code>modules/usage-stats/android/.../BootReceiver.kt</code></td><td>Restart the watcher after reboot when alerts were on</td></tr>
+<tr><td><code>src/store/reducer.ts</code></td><td>Pure reducer mapping actions to <code>quests.ts</code> operations</td></tr>
 <tr><td><code>modules/usage-stats/android/.../WatcherService.kt</code>, <code>Prefs.kt</code>, <code>UsageStatsModule.kt</code>, <code>index.ts</code></td><td>Service loop, config fields, usage-events query, notification delivery, restyled overlay</td></tr>
 </table>
 <p class="note">Removed: <code>App.tsx</code>, <code>index.ts</code>, <code>src/screens/*</code>, <code>src/components.tsx</code>, <code>src/theme.ts</code>, <code>src/types.ts</code>, <code>src/storage.ts</code>, <code>src/eta.ts</code>, <code>src/roasts.ts</code> (superseded).</p>
@@ -267,10 +292,10 @@ const q0 = createQuest({ title: 'Q', why: '', targetDate: '2026-10-06', hoursPer
 const done = (q, k) =&gt; q.milestones[0].tasks.slice(0, k).reduce((acc, t) =&gt; toggleTask(acc, t.id, NOW), q);
 
 it('extrapolates the ticking pace since creation', () =&gt; {
-  const p = projectQuest(done(q0, 2), NOW);        // 0.2 tasks/day, 4 left → 20 days
+  const p = projectQuest(done(q0, 2), NOW);        // 0.2 tasks/day, 4 left → 20 days → Oct 16
   expect(p.projectedDate?.toDateString()).toBe(new Date(2026, 9, 16, 12, 0).toDateString());
-  expect(p.daysToTarget).toBe(10);
-  expect(p.slipDays).toBe(10);
+  expect(p.daysToTarget).toBe(10);                 // whole local days: Sep 26 → Oct 6
+  expect(p.slipDays).toBe(10);                     // whole local days: Oct 6 → Oct 16
 });
 it('projects never when nothing is done', () =&gt; expect(projectQuest(q0, NOW).projectedDate).toBeNull());
 it('projects today with no slip when everything is done', () =&gt; {
@@ -293,7 +318,7 @@ it('formatPercent rounds', () =&gt; expect(formatPercent(0.425)).toBe('43'));
 it('formatDate handles never', () =&gt; expect(formatDate(null)).toBe('never at this pace'));
 it('parseLocalDate is local midnight', () =&gt; expect(parseLocalDate('2026-12-15').getHours()).toBe(0));</code></pre>
 <ul>
-<li>[ ] <strong>Step 2:</strong> run → FAIL. <strong>Step 3:</strong> implement. Days-to-target and slip use <code>Math.round(Δms / 86 400 000)</code>; elapsed days floor at 0.5; <code>days = minutes / (hoursPerWeek·60/7)</code> rounded to 2 dp; <code>taskEquivalents</code> rounded to 1 dp.</li>
+<li>[ ] <strong>Step 2:</strong> run → FAIL. <strong>Step 3:</strong> implement. Days-to-target and slip are whole local days between the two dates' local midnights (<code>Math.round</code> over midnights, so DST cannot add a day); elapsed days floor at 0.5; <code>days = minutes / (hoursPerWeek·60/7)</code> rounded to 2 dp; <code>taskEquivalents</code> rounded to 1 dp.</li>
 <li>[ ] <strong>Step 4:</strong> run → PASS. <strong>Step 5:</strong> commit <code>Add quest projection and formatting</code>.</li>
 </ul>
 </div>
@@ -377,9 +402,14 @@ opensByPackage(intervals: Interval[]): Record&lt;string, number&gt;
 minutesByPackage(intervals: Interval[], from: number, to: number): Record&lt;string, number&gt;
 hourlyMinutes(intervals: Interval[], dayStart: number): number[]    // length 24
 dailyMinutes(intervals: Interval[], days: number, todayStart: number): number[]  // oldest → today
-startOfLocalDay(ts: number): number</code></pre>
+startOfLocalDay(ts: number): number
+interface UsageSnapshotData { apps: AppUsage[]; totalToday: number; hourly: Record&lt;string, number[]&gt;;
+  last7: Record&lt;string, number[]&gt;; thisWeek: number; lastWeek: number | null }
+buildSnapshot(events: RawUsageEvent[], packages: string[], now: number, label: (pkg: string) =&gt; string): UsageSnapshotData
+  // apps: every tracked package (zero included), today's minutes and opens, sorted by minutes desc
+  // thisWeek: last 7 local days incl. today; lastWeek: the 7 before, or null when no event predates them</code></pre>
 <ul><li>[ ] <strong>Step 1: failing tests</strong></li></ul>
-<pre><code>import { dailyMinutes, hourlyMinutes, minutesByPackage, opensByPackage, startOfLocalDay, toIntervals } from '../usage';
+<pre><code>import { buildSnapshot, dailyMinutes, hourlyMinutes, minutesByPackage, opensByPackage, startOfLocalDay, toIntervals } from '../usage';
 const t = (h: number, m = 0, s = 0, d = 26) =&gt; new Date(2026, 8, d, h, m, s).getTime();
 const r = (pkg: string, ts: number) =&gt; ({ pkg, type: 'resumed' as const, ts });
 const p = (pkg: string, ts: number) =&gt; ({ pkg, type: 'paused' as const, ts });
@@ -414,7 +444,30 @@ it('returns daily minutes oldest to today', () =&gt; {
   expect(d).toHaveLength(7);
   expect(d.slice(-2)).toEqual([30, 15]);
 });
-it('startOfLocalDay is local midnight', () =&gt; expect(startOfLocalDay(t(15, 12))).toBe(t(0)));</code></pre>
+it('startOfLocalDay is local midnight', () =&gt; expect(startOfLocalDay(t(15, 12))).toBe(t(0)));
+
+describe('buildSnapshot', () =&gt; {
+  const label = (pkg: string) =&gt; pkg.toUpperCase();
+  const today = [r('ig', t(10)), p('ig', t(10, 40)), r('yt', t(11)), p('yt', t(11, 10)), r('ig', t(12)), p('ig', t(12, 5))];
+  it('lists every tracked app, zero included, sorted by today minutes', () =&gt; {
+    const s = buildSnapshot(today, ['yt', 'ig', 'rd'], t(13), label);
+    expect(s.apps.map(a =&gt; [a.pkg, a.minutes, a.opens])).toEqual([['ig', 45, 2], ['yt', 10, 1], ['rd', 0, 0]]);
+    expect(s.apps[0].label).toBe('IG');
+    expect(s.totalToday).toBe(55);
+  });
+  it('counts only today in apps even when history is loaded', () =&gt; {
+    const s = buildSnapshot([r('ig', t(10, 0, 0, 24)), p('ig', t(11, 0, 0, 24)), ...today], ['ig'], t(13), label);
+    expect(s.apps[0].minutes).toBe(45);
+    expect(s.last7.ig.slice(-3)).toEqual([60, 0, 45]);
+  });
+  it('has no last-week figure without history older than seven days', () =&gt;
+    expect(buildSnapshot(today, ['ig'], t(13), label).lastWeek).toBeNull());
+  it('compares against the previous seven days when history exists', () =&gt; {
+    const s = buildSnapshot([r('ig', t(9, 0, 0, 16)), p('ig', t(9, 30, 0, 16)), ...today], ['ig', 'yt'], t(13), label);
+    expect(s.lastWeek).toBe(30);
+    expect(s.thisWeek).toBe(55);
+  });
+});</code></pre>
 <ul>
 <li>[ ] <strong>Step 2:</strong> run → FAIL. <strong>Step 3:</strong> implement: sort events by <code>ts</code>; per package keep an open start; on pause close it; on resume within <code>MERGE_GAP_MS</code> of that package's last close, reopen the previous interval instead of starting a new one. Day boundaries via <code>new Date(y, m, d)</code> so DST is handled by the platform.</li>
 <li>[ ] <strong>Step 4:</strong> run → PASS. <strong>Step 5:</strong> commit <code>Add usage aggregation</code>.</li>
@@ -515,7 +568,7 @@ it('loads what was saved', async () =&gt; {
 
 <div class="task">
 <h3>Task 6: Native module v2 — trigger policy, usage events, delivery, overlay</h3>
-<p><strong>Files:</strong> create <code>modules/usage-stats/android/src/main/java/expo/modules/usagestats/TriggerPolicy.kt</code>, <code>modules/usage-stats/android/src/test/java/expo/modules/usagestats/TriggerPolicyTest.kt</code>; modify <code>WatcherService.kt</code>, <code>Prefs.kt</code>, <code>UsageStatsModule.kt</code>, <code>modules/usage-stats/index.ts</code>, <code>modules/usage-stats/android/build.gradle</code> (<code>testImplementation 'junit:junit:4.13.2'</code>).</p>
+<p><strong>Files:</strong> create <code>modules/usage-stats/android/src/main/java/expo/modules/usagestats/TriggerPolicy.kt</code>, <code>.../WatcherSession.kt</code>, <code>.../BootReceiver.kt</code>, <code>modules/usage-stats/android/src/test/java/expo/modules/usagestats/TriggerPolicyTest.kt</code>, <code>.../WatcherSessionTest.kt</code>; modify <code>WatcherService.kt</code>, <code>Prefs.kt</code>, <code>UsageStatsModule.kt</code>, <code>modules/usage-stats/android/src/main/AndroidManifest.xml</code> (<code>RECEIVE_BOOT_COMPLETED</code> + receiver for <code>BOOT_COMPLETED</code> and <code>MY_PACKAGE_REPLACED</code>), <code>modules/usage-stats/index.ts</code>, <code>modules/usage-stats/android/build.gradle</code> (<code>testImplementation 'junit:junit:4.13.2'</code>).</p>
 <p><strong>Produces (Kotlin):</strong></p>
 <pre><code>enum class TriggerKind { NONE, CONTINUOUS, DAILY_LIMIT }
 enum class Delivery { NOTIFICATION, OVERLAY }
@@ -526,6 +579,15 @@ object TriggerPolicy {
   fun decide(i: TriggerInput): TriggerKind
   fun delivery(level: String, canOverlay: Boolean): Delivery
   fun tier(sessionTriggers: Int): Int          // min(sessionTriggers, 2)
+}
+class WatcherSession {
+  val currentPkg: String?; val continuousMs: Long; val sessionTriggers: Int; val cooldownUntilMs: Long
+  fun start(nowMs: Long)
+  fun onTick(nowMs: Long, fg: String?, tracked: Collection&lt;String&gt;, ownPackage: String)
+  fun onCallout(nowMs: Long, cooldownMs: Long)   // triggers++, cooldown from now
+  fun onDismiss(nowMs: Long, cooldownMs: Long)   // cooldown from now, keeps continuousMs (escalation)
+  fun onLeave(nowMs: Long, cooldownMs: Long)     // "Fine, I'm out": reset + cooldown
+  fun reset()                                    // pause / alerts off
 }</code></pre>
 <p><strong>Produces (JS, <code>modules/usage-stats/index.ts</code>):</strong></p>
 <pre><code>interface WatcherConfig { watchedPackages: string[]; thresholdSeconds: number; cooldownSeconds: number;
@@ -574,10 +636,52 @@ class TriggerPolicyTest {
   }
 }</code></pre>
 <ul>
-<li>[ ] <strong>Step 2:</strong> <code>cd android &amp;&amp; ./gradlew :usage-stats:testDebugUnitTest</code> → FAIL (unresolved <code>TriggerPolicy</code>).</li>
-<li>[ ] <strong>Step 3:</strong> implement <code>TriggerPolicy</code>. Order: paused → NONE; not in tracked app → NONE; overlay showing → NONE; cooldown → NONE; daily limit (&gt;0, reached, not fired today) → DAILY_LIMIT; continuous ≥ threshold → CONTINUOUS; else NONE.</li>
+<pre><code>class WatcherSessionTest {
+  private val tracked = listOf("ig", "yt")
+  private fun session() = WatcherSession().apply { start(0) }
+
+  @Test fun accumulatesWhileOnTheSameTrackedApp() {
+    val s = session(); s.onTick(5_000, "ig", tracked, "me"); s.onTick(10_000, "ig", tracked, "me")
+    assertEquals(5_000L, s.continuousMs); assertEquals("ig", s.currentPkg)
+  }
+  @Test fun switchingTrackedAppsStartsFresh() {
+    val s = session(); s.onTick(5_000, "ig", tracked, "me"); s.onTick(10_000, "ig", tracked, "me"); s.onCallout(10_000, 60_000)
+    s.onTick(15_000, "yt", tracked, "me")
+    assertEquals(0L, s.continuousMs); assertEquals(0, s.sessionTriggers); assertEquals("yt", s.currentPkg)
+  }
+  @Test fun leavingForAnUntrackedAppResets() {
+    val s = session(); s.onTick(5_000, "ig", tracked, "me"); s.onTick(10_000, "ig", tracked, "me")
+    s.onTick(15_000, "launcher", tracked, "me")
+    assertEquals(null, s.currentPkg); assertEquals(0L, s.continuousMs)
+  }
+  @Test fun ownPackageKeepsTheSessionWithoutCounting() {
+    val s = session(); s.onTick(5_000, "ig", tracked, "me"); s.onTick(10_000, "ig", tracked, "me")
+    s.onTick(15_000, "me", tracked, "me"); s.onTick(20_000, "ig", tracked, "me")
+    assertEquals("ig", s.currentPkg); assertEquals(10_000L, s.continuousMs)
+  }
+  // SUPERSEDED BY REVIEW AMENDMENT A6: onTick gains screenOff and dayKey; null foreground is handled with a
+  // 30-second grace, screen-off ends the session at once, and a new day resets it. See A6 for the test list.
+  @Test fun calloutEscalatesAndStartsCooldown() {
+    val s = session(); s.onCallout(30_000, 120_000)
+    assertEquals(1, s.sessionTriggers); assertEquals(150_000L, s.cooldownUntilMs)
+  }
+  @Test fun dismissRestartsCooldownButKeepsContinuousTime() {
+    val s = session(); s.onTick(5_000, "ig", tracked, "me"); s.onTick(65_000, "ig", tracked, "me"); s.onCallout(65_000, 60_000)
+    s.onDismiss(80_000, 60_000)
+    assertEquals(60_000L, s.continuousMs); assertEquals(140_000L, s.cooldownUntilMs); assertEquals(1, s.sessionTriggers)
+  }
+  @Test fun leaveResetsAndStartsCooldown() {
+    val s = session(); s.onTick(5_000, "ig", tracked, "me"); s.onCallout(5_000, 60_000)
+    s.onLeave(9_000, 120_000)
+    assertEquals(null, s.currentPkg); assertEquals(0, s.sessionTriggers); assertEquals(129_000L, s.cooldownUntilMs)
+  }
+}</code></pre>
+<ul>
+<li>[ ] <strong>Step 2:</strong> <code>cd android &amp;&amp; ./gradlew :usage-stats:testDebugUnitTest</code> → FAIL (unresolved <code>TriggerPolicy</code>, <code>WatcherSession</code>).</li>
+<li>[ ] <strong>Step 3:</strong> implement <code>TriggerPolicy</code>. Order: paused → NONE; not in tracked app → NONE; overlay showing → NONE; cooldown → NONE; daily limit (&gt;0, reached, not fired today) → DAILY_LIMIT; continuous ≥ threshold → CONTINUOUS; else NONE. Implement <code>WatcherSession</code> by lifting the session fields and branches out of today's <code>WatcherService.tick()</code>.</li>
 <li>[ ] <strong>Step 4:</strong> run → PASS.</li>
-<li>[ ] <strong>Step 5: service wiring.</strong> <code>Prefs.getConfig</code> reads <code>sarcasmLevel</code> (default <code>"normal"</code>) and <code>dailyLimitMinutes</code> (default 0); add <code>dailyLimitFiredDay</code> (<code>yyyy-MM-dd</code>) get/set. <code>WatcherService.tick()</code> builds a <code>TriggerInput</code> (today's tracked ms computed only when in a tracked app and a limit is set and not yet fired) and acts on the decision. After any callout: <code>sessionTriggers++</code>, <code>cooldownUntil = now + cooldown</code>; overlay dismissal restarts the cooldown and <em>keeps</em> <code>continuousMs</code> so escalation fires after the wait if still scrolling. DAILY_LIMIT stamps today's day key. Fill <code>{sessionMinutes}</code> and <code>{todayMinutes}</code> at display time. Remove the debug <code>Log.d</code> tick line.</li>
+<li>[ ] <strong>Step 5: service wiring.</strong> <code>Prefs.getConfig</code> reads <code>sarcasmLevel</code> (default <code>"normal"</code>) and <code>dailyLimitMinutes</code> (default 0); add <code>dailyLimitFiredDay</code> (<code>yyyy-MM-dd</code>) and <code>alertsEnabled</code> get/set (<code>startWatcher</code> sets true, <code>stopWatcher</code> false). <code>WatcherService</code> owns one <code>WatcherSession</code>; each tick calls <code>onTick</code>, builds a <code>TriggerInput</code> and acts on the decision (<code>onCallout</code> after any callout; overlay buttons call <code>onDismiss</code> / <code>onLeave</code>; pause calls <code>reset</code>). Today's tracked ms is recomputed with <code>UsageQueries.usageTodayMs</code> at most once per 60 s while in a tracked app with a limit set and not yet fired, and advanced by tick deltas in between. DAILY_LIMIT stamps today's day key. Fill <code>{sessionMinutes}</code> and <code>{todayMinutes}</code> at display time. Remove the debug <code>Log.d</code> tick line.</li>
+<li>[ ] <strong>Step 5b: boot restart.</strong> <code>BootReceiver</code> handles <code>BOOT_COMPLETED</code> and <code>MY_PACKAGE_REPLACED</code>: if <code>Prefs.alertsEnabled</code> and usage access is granted, <code>startForegroundService(WatcherService)</code>; wrap in try/catch so a platform refusal never crashes boot.</li>
 <li>[ ] <strong>Step 6: notification delivery.</strong> Channel <code>later_me_callouts</code> (IMPORTANCE_HIGH, created in <code>onCreate</code>); id <code>5100</code>; big-text style; tap opens the app; skipped silently if notifications are disabled.</li>
 <li>[ ] <strong>Step 7: overlay restyle.</strong> Background <code>#F20B0D12</code>; small label “Observation” in sarcasm orange; headline per tier (“Still here?”, “Again.”, “Okay. Intervention.”, daily limit: “Daily limit reached.”); roast in text <code>#F5F7FA</code>; “Focus quest · {goalLabel}” in muted <code>#9AA3B2</code>; primary “Fine, I'm out” button violet <code>#8B7CFF</code> with <code>#0B0D12</code> text and 12dp radius (<code>GradientDrawable</code>); dismiss link muted. No emoji.</li>
 <li>[ ] <strong>Step 8: events query.</strong> <code>AsyncFunction("getUsageEvents") { begin: Double, end: Double, packages: List&lt;String&gt; -&gt; }</code> returns <code>[{ pkg, type: "resumed"|"paused", ts }]</code> for RESUMED/PAUSED only, filtered to packages. Update <code>index.ts</code> types; keep non-Android fallbacks.</li>
@@ -591,9 +695,12 @@ class TriggerPolicyTest {
 <p><strong>Files:</strong> create <code>src/watcher/config.ts</code>, <code>src/watcher/__tests__/config.test.ts</code>.</p>
 <p><strong>Consumes:</strong> <code>AppState</code>, <code>focusQuest</code>, <code>buildRoastTiers</code>, <code>UsageStats</code>. <strong>Produces:</strong></p>
 <pre><code>buildWatcherConfig(s: AppState): WatcherConfig
-syncWatcher(s: AppState, now: Date): void   // alerts off → stop if running; on + usage access → startWatcher(config, tiers)</code></pre>
+type SyncAction = 'stop' | 'start' | 'roasts' | 'none';
+planSync(input: { alertsEnabled: boolean; usageAccess: boolean; running: boolean;
+  configKey: string; lastConfigKey: string | null; roastsKey: string; lastRoastsKey: string | null }): SyncAction
+syncWatcher(s: AppState, now: Date): void   // computes keys (JSON), calls planSync, performs the native call, remembers keys</code></pre>
 <ul><li>[ ] <strong>Step 1: failing tests</strong></li></ul>
-<pre><code>import { buildWatcherConfig } from '../config';
+<pre><code>import { buildWatcherConfig, planSync } from '../config';
 import { addQuest, createQuest, emptyState } from '../../domain/quests';
 const makeId = (() =&gt; { let n = 0; return () =&gt; `id${++n}`; })();
 const q = createQuest({ title: 'Ship it', why: '', targetDate: '2026-12-01', hoursPerWeek: 5,
@@ -612,7 +719,20 @@ it('sends 0 when there is no daily limit', () =&gt;
   expect(buildWatcherConfig(withSettings({ dailyLimitMinutes: null })).dailyLimitMinutes).toBe(0));
 it('passes tracked packages and level through', () =&gt;
   expect(buildWatcherConfig(withSettings({ trackedPackages: ['a'], sarcasmLevel: 'gentle' })))
-    .toMatchObject({ watchedPackages: ['a'], sarcasmLevel: 'gentle' }));</code></pre>
+    .toMatchObject({ watchedPackages: ['a'], sarcasmLevel: 'gentle' }));
+
+describe('planSync', () =&gt; {
+  const base = { alertsEnabled: true, usageAccess: true, running: true,
+    configKey: 'c1', lastConfigKey: 'c1', roastsKey: 'r1', lastRoastsKey: 'r1' };
+  it('stops a running watcher when alerts are off', () =&gt; expect(planSync({ ...base, alertsEnabled: false })).toBe('stop'));
+  it('does nothing when alerts are off and nothing runs', () =&gt;
+    expect(planSync({ ...base, alertsEnabled: false, running: false })).toBe('none'));
+  it('does not start without usage access', () =&gt; expect(planSync({ ...base, running: false, usageAccess: false })).toBe('none'));
+  it('starts when not running', () =&gt; expect(planSync({ ...base, running: false })).toBe('start'));
+  it('restarts when the config changed', () =&gt; expect(planSync({ ...base, configKey: 'c2' })).toBe('start'));
+  it('only pushes roasts when just the roasts changed', () =&gt; expect(planSync({ ...base, roastsKey: 'r2' })).toBe('roasts'));
+  it('does nothing when nothing changed', () =&gt; expect(planSync(base)).toBe('none'));
+});</code></pre>
 <ul>
 <li>[ ] <strong>Step 2:</strong> run → FAIL. <strong>Step 3:</strong> implement. <strong>Step 4:</strong> run → PASS. <strong>Step 5:</strong> commit <code>Derive watcher config from app state</code>.</li>
 </ul>
@@ -620,7 +740,7 @@ it('passes tracked packages and level through', () =&gt;
 
 <div class="task">
 <h3>Task 8: Router shell, store and design system</h3>
-<p><strong>Files:</strong> create <code>src/app/_layout.tsx</code>, <code>src/app/(tabs)/_layout.tsx</code>, <code>src/store/AppStore.tsx</code>, <code>src/ui/theme.ts</code>, <code>src/ui/Icon.tsx</code>, <code>src/ui/Text.tsx</code>, <code>src/ui/Button.tsx</code>, <code>src/ui/Card.tsx</code>, <code>src/ui/Chip.tsx</code>, <code>src/ui/ProgressBar.tsx</code>, <code>src/ui/Spine.tsx</code>, <code>src/ui/Segmented.tsx</code>, <code>src/ui/RadioGroup.tsx</code>, <code>src/ui/Toggle.tsx</code>, <code>src/ui/TaskRow.tsx</code>, <code>src/ui/TopBar.tsx</code>, <code>src/ui/Screen.tsx</code>, <code>src/ui/TabBar.tsx</code>, <code>src/features/permissions/usePermissions.ts</code>; modify <code>package.json</code> (<code>"main": "expo-router/entry"</code>), <code>app.json</code> (scheme <code>laterme</code>, <code>experiments.typedRoutes</code>, background <code>#0B0D12</code>); delete the superseded files listed above.</p>
+<p><strong>Files:</strong> create <code>src/store/reducer.ts</code>, <code>src/store/__tests__/reducer.test.ts</code>, <code>src/app/_layout.tsx</code>, <code>src/app/(tabs)/_layout.tsx</code>, <code>src/store/AppStore.tsx</code>, <code>src/ui/theme.ts</code>, <code>src/ui/Icon.tsx</code>, <code>src/ui/Text.tsx</code>, <code>src/ui/Button.tsx</code>, <code>src/ui/Card.tsx</code>, <code>src/ui/Chip.tsx</code>, <code>src/ui/ProgressBar.tsx</code>, <code>src/ui/Spine.tsx</code>, <code>src/ui/Segmented.tsx</code>, <code>src/ui/RadioGroup.tsx</code>, <code>src/ui/Toggle.tsx</code>, <code>src/ui/TaskRow.tsx</code>, <code>src/ui/TopBar.tsx</code>, <code>src/ui/Screen.tsx</code>, <code>src/ui/TabBar.tsx</code>, <code>src/features/permissions/usePermissions.ts</code>; modify <code>package.json</code> (<code>"main": "expo-router/entry"</code>), <code>app.json</code> (scheme <code>laterme</code>, <code>experiments.typedRoutes</code>, background <code>#0B0D12</code>); delete the superseded files listed above.</p>
 <p><strong>Produces:</strong></p>
 <pre><code>// AppStore.tsx
 type Action = { type: 'hydrate'; state: AppState } | { type: 'addQuest'; quest: Quest }
@@ -637,7 +757,30 @@ usePermissions(): { usage: boolean; overlay: boolean; notifications: boolean; re
 //   check, plus, flame, clock, settings, x, alert, calendar, sparkles, eye, up, down, edit, trash, shield, phone, flag, map)</code></pre>
 <ul>
 <li>[ ] <strong>Step 1:</strong> <code>npx expo install expo-router react-native-safe-area-context react-native-screens expo-linking expo-constants react-native-svg @expo-google-fonts/inter expo-splash-screen @react-native-community/datetimepicker</code>.</li>
-<li>[ ] <strong>Step 2:</strong> reducer delegates to <code>quests.ts</code> functions (already tested); provider hydrates via <code>loadAppState</code>, saves on change after hydrate, and calls <code>syncWatcher</code> on change and when the app returns to foreground.</li>
+<li>[ ] <strong>Step 2: failing reducer tests</strong> — <code>src/store/__tests__/reducer.test.ts</code>:
+<pre><code>import { reducer } from '../reducer';
+import { createQuest, emptyState } from '../../domain/quests';
+const NOW = new Date(2026, 8, 26, 12, 0);
+jest.useFakeTimers().setSystemTime(NOW);
+const makeId = (() =&gt; { let n = 0; return () =&gt; `id${++n}`; })();
+const q = createQuest({ title: 'A', why: '', targetDate: '2026-12-01', hoursPerWeek: 5,
+  milestones: [{ title: 'M', tasks: [{ title: 'T', minutes: null }] }] }, NOW, makeId);
+const withQuest = reducer(emptyState(), { type: 'addQuest', quest: q });
+
+it('hydrate replaces state', () =&gt; expect(reducer(emptyState(), { type: 'hydrate', state: withQuest })).toBe(withQuest));
+it('addQuest adds and focuses the first quest', () =&gt; expect(withQuest.focusQuestId).toBe(q.id));
+it('toggleTask ticks the task', () =&gt;
+  expect(reducer(withQuest, { type: 'toggleTask', questId: q.id, taskId: q.milestones[0].tasks[0].id })
+    .quests[0].milestones[0].tasks[0].done).toBe(true));
+it('setStatus pauses and drops focus', () =&gt;
+  expect(reducer(withQuest, { type: 'setStatus', questId: q.id, status: 'paused' }).focusQuestId).toBeNull());
+it('deleteQuest removes it', () =&gt; expect(reducer(withQuest, { type: 'deleteQuest', questId: q.id }).quests).toEqual([]));
+it('updateSettings merges a patch', () =&gt;
+  expect(reducer(withQuest, { type: 'updateSettings', patch: { sarcasmLevel: 'savage' } }).settings)
+    .toMatchObject({ sarcasmLevel: 'savage', alertsEnabled: true }));
+it('unknown quest ids leave state unchanged', () =&gt;
+  expect(reducer(withQuest, { type: 'toggleTask', questId: 'nope', taskId: 'x' })).toBe(withQuest));</code></pre>
+Run <code>npx jest src/store</code> → FAIL; implement <code>reducer.ts</code> delegating to <code>quests.ts</code> (uses <code>new Date()</code> for timestamps); run → PASS. Provider hydrates via <code>loadAppState</code>, saves on change after hydrate, and calls <code>syncWatcher</code> on change and when the app returns to foreground.</li>
 <li>[ ] <strong>Step 3:</strong> root layout loads Inter 400/500/600/700, holds the splash until fonts and store are ready, wraps a dark <code>Stack</code> (no headers; screens draw <code>TopBar</code>). Tabs layout uses <code>TabBar</code> styled like Questify's nav (62px, icon + label, violet active).</li>
 <li>[ ] <strong>Step 4:</strong> primitives mirror Questify CSS components (<code>.card</code>, <code>.chip</code>, <code>.bar</code>, <code>.segmented</code>, <code>.radio</code>, <code>.toggle</code>, <code>.task</code>, <code>.btn</code> primary/secondary/tertiary). All numbers use <code>fontVariant: ['tabular-nums']</code>; touch targets ≥ 44px; <code>accessibilityRole</code> and <code>accessibilityState</code> set on checkbox / radio / switch.</li>
 <li>[ ] <strong>Step 5:</strong> <code>npx tsc --noEmit</code> and <code>npx jest</code> green. UI is presentation over tested logic, so it is verified on the emulator (Task 11) rather than unit-tested.</li>
@@ -700,10 +843,104 @@ KNOWN_APPS: Record&lt;string, string&gt;                    // Instagram, YouTub
 <li>[ ] <strong>Step 5: callouts.</strong> Alert after 30 s (dev option), Chrome tracked: gentle → notification (no overlay); normal → restyled overlay; savage → overlay with savage copy, second trigger ~1 min after dismiss. Daily limit: pick the dev-only 1-minute limit with Alert after set to 30 min; after a minute in Chrome exactly one “Daily limit reached.” callout fires, and none after re-opening Chrome.</li>
 <li>[ ] <strong>Step 6: attention.</strong> Attention totals roughly match <code>adb shell dumpsys usagestats</code> for Chrome; opens count increments after leaving and re-opening Chrome.</li>
 <li>[ ] <strong>Step 7: permissions.</strong> Revoke overlay (<code>adb shell appops set com.yuvraj.laterme SYSTEM_ALERT_WINDOW deny</code>): Home banner appears, normal level falls back to a notification.</li>
-<li>[ ] <strong>Step 8:</strong> release build, launch with Metro stopped; no crash in logcat.</li>
-<li>[ ] <strong>Step 9:</strong> commit <code>Document the Questify port</code>.</li>
+<li>[ ] <strong>Step 8: Phase 1 regressions.</strong> “Not today” silences callouts for 45 s in Chrome; swiping the app out of recents keeps the service ticking; “Fine, I'm out” lands on the launcher and the next callout is tier 0 again.</li>
+<li>[ ] <strong>Step 9: alerts off and reboot.</strong> Alerts toggle off → no <code>WatcherService</code> record in <code>dumpsys activity services</code>; on again → record returns. <code>adb reboot</code> with alerts on → service record present after boot without opening the app.</li>
+<li>[ ] <strong>Step 10:</strong> release build, launch with Metro stopped; no crash in logcat.</li>
+<li>[ ] <strong>Step 11:</strong> commit <code>Document the Questify port</code>.</li>
 </ul>
 </div>
+
+<h2>Review amendments (binding — override the task text above where they conflict)</h2>
+<p class="note">From the engineering review and the outside-voice challenge, all accepted 2026-09-26. Each amendment names its task; its tests are added to that task's failing-test step.</p>
+
+<h3>A0 — Environment (all tasks)</h3>
+<ul>
+<li><code>export ANDROID_HOME=~/Library/Android/sdk</code>; adb is <code>$ANDROID_HOME/platform-tools/adb</code> (not on PATH).</li>
+<li>Metro: <code>env CI=false npx expo start</code> (CI mode serves stale bundles).</li>
+<li>The parent <code>~/Downloads/AGENTS.md</code> portfolio rules (bun, no <code>src/</code>) do not apply to this repo. This repo uses npm and <code>src/</code>; its own <code>AGENTS.md</code> (Expo SDK 57 docs) does apply.</li>
+<li>Gradle 9 builds with the installed JDK 23 (proven in Phase 1); no JDK change.</li>
+</ul>
+
+<h3>A1 — TypeScript and Jest config (Task 1)</h3>
+<ul>
+<li>TS 6 defaults <code>types</code> to <code>[]</code>: add <code>"types": ["jest"]</code> to <code>tsconfig.json</code>; if that breaks app typings, move test typing to a <code>tsconfig.test.json</code> and keep <code>tsc --noEmit</code> over both. Do not add <code>baseUrl</code> (deprecated in TS 6).</li>
+<li>Jest: <code>"moduleNameMapper": { "^@/(.*)$": "&lt;rootDir&gt;/src/$1" }</code>.</li>
+<li>Every test helper is typed (<code>(q: Quest, mi: number, ti: number)</code>, <code>(over: Partial&lt;AccountabilitySettings&gt;)</code>, <code>it.each</code> tuples typed via <code>as const</code> or explicit generics).</li>
+</ul>
+
+<h3>A2 — Migration keeps progress (Task 5)</h3>
+<ul>
+<li>Legacy goal becomes one milestone “Roadmap” with <code>max(stepsTotal, stepsDone + 1)</code> tasks titled “Step 1…N”; the first <code>stepsDone</code> are done (<code>doneAt</code> = legacy <code>createdAt</code>) and task <code>stepsDone + 1</code> takes the legacy <code>currentStep</code> title (or “Decide your next step”).</li>
+<li>Target date: if the legacy ISO string ends in <code>T00:00:00.000Z</code> take its first 10 chars, else format the parsed date's local Y-M-D.</li>
+<li><code>hoursPerWeek</code> clamped to ≥ 1. <code>costOfMinutes</code> returns <code>days: 0</code> when the budget is 0 (Task 2 test).</li>
+<li><code>migrateLegacy(goal, settings, now, makeId, { watcherRunning })</code>: <code>alertsEnabled = watcherRunning</code>. <code>loadAppState</code> passes <code>UsageStats.isWatcherRunning()</code>.</li>
+<li>Tests: 4/10 legacy → progress 0.4 and task 5 titled with the current step; non-ISO local date keeps its local day; hours 0 → 1; watcher stopped → alerts off.</li>
+</ul>
+
+<h3>A3 — Tolerant state parsing (Task 5)</h3>
+<ul>
+<li><code>parseState</code> is corrupt only when JSON fails, the value is not an object, or <code>version !== 2</code>.</li>
+<li>Settings are merged over <code>DEFAULT_SETTINGS</code> key by key; an invalid value falls back to the default. Quests with a malformed shape are dropped one by one (malformed tasks and milestones likewise); <code>focusQuestId</code> is cleared if it no longer names an active quest.</li>
+<li><code>normalizeSettings(s, isDev)</code>: outside dev builds, alert-after 0.5 → 5 and daily limit 1 → 60. Applied on load.</li>
+<li>Tests: unknown extra keys survive; a missing settings key takes its default; one malformed quest is dropped while the other survives; dev values snap in production mode.</li>
+</ul>
+
+<h3>A4 — Daily-limit callout (Tasks 3, 6)</h3>
+<ul>
+<li>Roast payload becomes <code>RoastPools = { tiers: string[][]; limit: string[] }</code>, sent as JSON; native parses it and still accepts the Phase 1 array format until the first sync.</li>
+<li>DAILY_LIMIT uses the <code>limit</code> pool and headline “Daily limit reached.”, calls <code>WatcherSession.onLimitCallout(now, cooldownMs)</code> (cooldown only, no tier increment).</li>
+<li>Native today-tracked time looks back 12 h before midnight to find sessions that started yesterday and clips them at midnight, via a pure <code>UsageMath.trackedMsBetween(events: List&lt;FgEvent&gt;, fromMs, toMs, packages)</code> with a JUnit test for the 23:50→00:20 case.</li>
+<li>Tests: each level has a non-empty <code>limit</code> pool; limit lines never contain <code>{sessionMinutes}</code>; <code>onLimitCallout</code> leaves <code>sessionTriggers</code> unchanged.</li>
+</ul>
+
+<h3>A5 — Callouts never go stale (Tasks 3, 6, 7)</h3>
+<ul>
+<li>Allowed placeholders: <code>{sessionMinutes}</code>, <code>{todayMinutes}</code>, <code>{daysLeft}</code>, all filled natively. <code>WatcherConfig</code> gains <code>targetDateMs</code> (focus quest's target at local midnight, 0 with no focus quest); native computes whole days left at display time.</li>
+<li>Roasts bake in only stable facts (quest title, next task, its estimate, deadline date). Projected finish stays in the app screens, not in callouts. <code>buildRoastTiers(level, quest)</code> drops its <code>now</code> argument; <code>previewLine(level, quest, now)</code> keeps it to fill samples.</li>
+<li>Test: roasts built for the same quest are identical regardless of the current date (no time-dependent content).</li>
+</ul>
+
+<h3>A6 — Foreground tracking and session lifecycle (Task 6)</h3>
+<ul>
+<li>Pure <code>ForegroundTracker</code> over <code>FgEvent(kind: RESUMED|PAUSED|SCREEN_OFF|SCREEN_ON, pkg, cls, ts)</code>: RESUMED sets current; PAUSED clears only if it matches the current package and class; SCREEN_OFF clears and sets <code>screenOff</code>; SCREEN_ON clears the flag; no events leaves state unchanged. The service primes it with the last hour on start, then feeds only events since the previous tick (maps <code>UsageEvents</code> RESUMED / PAUSED / SCREEN_NON_INTERACTIVE / SCREEN_INTERACTIVE). This replaces the per-tick one-hour scan.</li>
+<li><code>WatcherSession.onTick(nowMs, fg, screenOff, dayKey, tracked, ownPackage)</code>: tracked fg accumulates (same app) or starts fresh (other tracked app); own package keeps the session without counting; untracked fg resets; null fg keeps and counts for up to 30 s, then resets; <code>screenOff</code> resets at once; a new <code>dayKey</code> resets.</li>
+<li>The ticker runs on a <code>HandlerThread</code>; overlay add/remove is posted to the main looper; overlay button callbacks post session mutations back to the ticker thread.</li>
+<li>Tests: ForegroundTracker (resume, matching pause, in-app hop PAUSED A1 → RESUMED A2 keeps the app, screen off, no events); WatcherSession (brief null keeps and counts, 30 s null resets, screen off resets, new day resets, plus the Task 6 cases that remain valid).</li>
+</ul>
+
+<h3>A7 — Sync safety and visibility (Tasks 6, 7, 8, 10)</h3>
+<ul>
+<li><code>syncWatcher</code> runs only after the store is hydrated. Native <code>startWatcher</code> catches the start-not-allowed exception and returns <code>false</code>; JS shows that in Accountability.</li>
+<li>Accountability shows the live running state from <code>isWatcherRunning()</code> (“Watching” / “Not running — tap to retry”).</li>
+</ul>
+
+<h3>A8 — Usage history honesty and cost (Tasks 4, 6, 10)</h3>
+<ul>
+<li><code>getUsageEvents</code> returns <code>{ events, historyStartMs }</code>, where <code>historyStartMs</code> is the earliest event of any package in the queried range (null if none).</li>
+<li><code>buildSnapshot(events, historyStartMs, packages, now, label)</code>: <code>lastWeek</code> is null unless <code>historyStartMs</code> ≤ the start of the previous 7-day window. The UI shows a change % only when <code>lastWeek &gt; 0</code>.</li>
+<li>One <code>UsageProvider</code> (context) serves Home and Attention: full 14-day fetch at mount and when the local day changes, today-only fetch every 30 s while the app is in the foreground.</li>
+<li>Tests: update the Task 4 <code>buildSnapshot</code> tests to pass <code>historyStartMs</code> (null → <code>lastWeek</code> null even with an old event in the list; a history start before the window → number).</li>
+</ul>
+
+<h3>A9 — Notifications and required permissions (Tasks 6, 8, 10)</h3>
+<ul>
+<li>Native <code>canPostCallouts()</code>: notifications enabled for the app and the <code>later_me_callouts</code> channel not set to none (a missing channel counts as fine). Native <code>openNotificationSettings()</code>.</li>
+<li><code>requestNotifications()</code> calls <code>PermissionsAndroid.request</code> only on API ≥ 33 and only if not previously denied; otherwise opens notification settings.</li>
+<li>Pure <code>missingPermissions(level, perms)</code> in <code>src/domain/permissions.ts</code>: usage access always required; gentle also requires notifications; normal/savage require overlay (notifications recommended, not required). Home banner and Accountability rows use it. Tests cover all three levels.</li>
+</ul>
+
+<h3>A10 — Verify on device per task (Tasks 6, 8, 9, 10, 11)</h3>
+<ul>
+<li>Task 6 also patches the old <code>WatcherScreen</code> call site to the new <code>WatcherConfig</code> shape so <code>tsc</code> stays green until Task 8 deletes it.</li>
+<li>End of Task 8: confirm the Phase 1 app is installed (<code>adb shell pm list packages | grep laterme</code>); <code>npx expo prebuild -p android --clean</code>; debug build; <code>adb install -r</code> over it. If the signature differs, build Phase 1 from commit <code>15763f9</code> in a worktree, re-enter the goal, then upgrade. Smoke: app boots, three tabs render, migrated quest shows (Task 11 step 2 moves here).</li>
+<li>Tasks 9 and 10 each end with an emulator screenshot pass of every screen they add.</li>
+</ul>
+
+<h3>A11 — Deterministic end-to-end checks (Task 11)</h3>
+<ul>
+<li>Daily limit: Chrome already has usage today, so selecting the dev 1-minute limit must fire exactly one “Daily limit reached.” callout within one tick of opening Chrome, and none again that day.</li>
+<li>Usage accuracy: measure a stopwatched 3-minute Chrome session and check the Attention delta is 3 ± 0.5 min, instead of comparing with <code>dumpsys</code> daily buckets.</li>
+</ul>
 
 <h2>Spec coverage</h2>
 <table>
@@ -717,6 +954,62 @@ KNOWN_APPS: Record&lt;string, string&gt;                    // Instagram, YouTub
 <tr><td>Error handling (revoked permissions, notifications denied, corrupt data)</td><td>5, 6, 8, 10, 11</td></tr>
 <tr><td>Testing (unit + emulator)</td><td>1–7, 11</td></tr>
 </table>
+
+<h2>GSTACK REVIEW REPORT</h2>
+<table>
+<tr><th>Review</th><th>Trigger</th><th>Why</th><th>Runs</th><th>Status</th><th>Findings</th></tr>
+<tr><td>CEO Review</td><td><code>/plan-ceo-review</code></td><td>Scope &amp; strategy</td><td>0</td><td>—</td><td>not a stage of this session's loop; scope set in brainstorm</td></tr>
+<tr><td>Codex Review</td><td><code>/codex review</code></td><td>Independent 2nd opinion</td><td>1</td><td>issues_found (Claude subagent; Codex not installed)</td><td>11 findings, 11 accepted</td></tr>
+<tr><td>Eng Review</td><td><code>/plan-eng-review</code></td><td>Architecture &amp; tests (required)</td><td>1</td><td>CLEAR (PLAN)</td><td>9 issues, 0 critical gaps open</td></tr>
+<tr><td>Design Review</td><td><code>/plan-design-review</code></td><td>UI/UX gaps</td><td>0</td><td>—</td><td>design is the approved Questify prototype</td></tr>
+<tr><td>DX Review</td><td><code>/plan-devex-review</code></td><td>Developer experience gaps</td><td>0</td><td>—</td><td>—</td></tr>
+</table>
+
+<p><strong>Step 0.</strong> Complexity smell triggered (more than 8 files, several new modules). Not re-opened: the user chose the core-loop scope over a reskin during brainstorming. Built-ins used throughout (Expo Router, react-native-svg, community date picker, jest-expo) — no custom infrastructure.</p>
+
+<p><strong>Engineering findings, all folded into the plan:</strong></p>
+<ol>
+<li>Architecture: service session state was untestable inside <code>WatcherService</code> → <code>WatcherSession</code> extracted with JUnit tests (Task 6).</li>
+<li>Architecture: <code>syncWatcher</code> restarted the service on every state change → pure <code>planSync</code> with dedupe (Task 7).</li>
+<li>Architecture: watcher stays off after reboot or app update → <code>BootReceiver</code> (user approved, D1).</li>
+<li>Architecture: continuous time stalled after an hour inside one activity → superseded by A6 incremental tracking.</li>
+<li>Code quality: usage hook swallowed native failures silently → <code>error</code> flag and permissions state (Task 10).</li>
+<li>Code quality: Kotlin and TypeScript both compute minutes → accepted duplication; both ignore STOPPED and duplicate resumes, and A4 shares the midnight semantics.</li>
+<li>Tests: reducer, <code>buildSnapshot</code>, <code>planSync</code>, <code>WatcherSession</code> had no tests → added. Phase 1 regressions (pause, swipe survival, “Fine, I'm out”) added to Task 11.</li>
+<li>Performance: 14-day event query every 30 s → history once, today-only polling (A8).</li>
+<li>Performance: daily-limit recompute from midnight every tick on the main looper → throttled baseline plus deltas, ticker on a <code>HandlerThread</code> (Task 6, A6).</li>
+</ol>
+
+<p><strong>Outside voice (Claude subagent), accepted in full (D2):</strong> amendments A0–A11. Cross-model tension: one — the review had made a null foreground count as “still in the app”; the outside voice showed a screen lock produces the same null. Resolved in favour of the outside voice (A6).</p>
+
+<p><strong>Test coverage (planned):</strong></p>
+<pre><code>CODE PATHS                                        USER FLOWS
+domain/quests    create, validate, progress,      Create quest end to end ......... emulator (T11)
+                 position, toggle, focus rules    Tick through milestone ........... emulator (T11)
+                 ★★★ unit                         Focus reassignment on pause ...... unit ★★★ + emulator
+domain/eta       pace, never, done, slip,         Callout per sarcasm level ........ emulator (T11)
+                 cost, zero budget ★★★            Daily limit fires once ........... JUnit ★★★ + emulator
+domain/roasts    3 levels × tiers, limit pool,    Permissions revoked / banner ..... unit ★★★ + emulator
+                 placeholders, tone, freshness    Migration from Phase 1 ........... unit ★★★ + emulator (T8)
+domain/usage     intervals, merge gap, opens,     Reboot restarts watcher .......... emulator (T11)
+                 clip, hourly, daily, snapshot    Not today / swipe / leave ........ emulator (regression)
+migration/persist legacy, progress, dates,
+                 corrupt backup, tolerant parse   GAPS: UI rendering is screenshot-verified,
+watcher/config   config, planSync ★★★                   not unit-tested (by design)
+native           TriggerPolicy, WatcherSession,
+                 ForegroundTracker, UsageMath ★★★ (JUnit)</code></pre>
+
+<p><strong>Failure modes:</strong> screen lock mid-session (A6, tested); service start refused in background (A7, caught, visible); notification channel muted (A9, detected); history pruned by the OS (A8, “Not enough history yet”); corrupt stored data (A3, backed up, partial recovery). No critical gap left silent and untested.</p>
+
+<p><strong>NOT in scope:</strong> accounts and sync (needs a backend); AI roadmap generation (needs an LLM); focus timer, stats, XP, achievements, rewards, notification history, profile, light theme, onboarding carousel, quest editing after creation (next cycle); Play Store distribution — APKs stay hand-delivered.</p>
+
+<p><strong>What already exists and is reused:</strong> <code>UsageQueries.foregroundApp</code> / <code>usageTodayMs</code> (evolved, not rebuilt), <code>Prefs</code> JSON bridge, overlay mechanics and pause in <code>WatcherService</code>, roast lines from <code>src/roasts.ts</code> (rewritten under the tone rule), pace maths from <code>src/eta.ts</code>, AsyncStorage keys (migrated).</p>
+
+<p><strong>Parallelization:</strong> Lane A — Tasks 1–5, 7 (<code>src/domain</code>, <code>src/store</code>, <code>src/watcher</code>), sequential. Lane B — Task 6 (<code>modules/usage-stats</code>), independent until Task 7 consumes its types. Then Tasks 8 → 9 → 10 → 11 sequential. Executed inline in one session, so lanes run in order.</p>
+
+<p><strong>VERDICT:</strong> ENG CLEARED — ready to implement.</p>
+
+<p>NO UNRESOLVED DECISIONS</p>
 </main>
 </body>
 </html>
