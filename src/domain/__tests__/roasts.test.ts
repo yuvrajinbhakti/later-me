@@ -1,5 +1,5 @@
 import { BANNED_PHRASES, buildRoastPools, observationLine, previewLine } from '../roasts';
-import { createQuest } from '../quests';
+import { createQuest, toggleTask } from '../quests';
 import type { Quest, SarcasmLevel } from '../types';
 
 const NOW = new Date(2026, 8, 26, 12, 0);
@@ -57,6 +57,15 @@ it('falls back to usage-only copy without a quest', () => {
     pools.tiers.forEach((tier) => expect(tier.length).toBeGreaterThan(0));
     const lines = everyLine(l, null);
     lines.forEach((line) => expect(line).not.toMatch(/undefined|null|NaN|\{daysLeft\}/));
+  });
+});
+
+it('names the quest instead of quoting a placeholder when every task is ticked', () => {
+  const doneQuest = toggleTask(quest, quest.milestones[0].tasks[0].id, NOW);
+  LEVELS.forEach((l) => {
+    const text = everyLine(l, doneQuest).join('\n');
+    expect(text).not.toContain('your next step');
+    expect(text).toContain('Become a better frontend engineer');
   });
 });
 

@@ -210,10 +210,7 @@ class WatcherService : Service() {
     } else {
       0L
     }
-    return template
-      .replace("{sessionMinutes}", sessionMin.toString())
-      .replace("{todayMinutes}", todayMin.toString())
-      .replace("{daysLeft}", daysLeft.toString())
+    return CalloutText.fill(template, sessionMin, todayMin, daysLeft)
   }
 
   private fun deliver(config: WatcherConfig, headline: String, template: String, dismissLabel: String, now: Long) {

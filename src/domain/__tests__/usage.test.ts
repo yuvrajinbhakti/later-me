@@ -6,6 +6,9 @@ import {
   opensByPackage,
   startOfLocalDay,
   toIntervals,
+  twoHourBuckets,
+  weekChange,
+  weekdayLabels,
 } from '../usage';
 
 const t = (h: number, m = 0, s = 0, d = 26) => new Date(2026, 8, d, h, m, s).getTime();
@@ -80,6 +83,29 @@ it('returns daily minutes oldest to today', () => {
 });
 
 it('startOfLocalDay is local midnight', () => expect(startOfLocalDay(t(15, 12))).toBe(t(0)));
+
+describe('chart helpers', () => {
+  it('folds 24 hours into twelve two-hour buckets', () => {
+    const hourly = Array.from({ length: 24 }, (_, h) => (h === 22 ? 30 : h === 23 ? 15 : h === 0 ? 5 : 0));
+    const buckets = twoHourBuckets(hourly);
+    expect(buckets).toHaveLength(12);
+    expect(buckets[0]).toBe(5);
+    expect(buckets[11]).toBe(45);
+  });
+
+  it('labels the last seven days ending today', () =>
+    expect(weekdayLabels(t(0), 7)).toEqual(['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'])); // Sep 26 2026 is a Saturday
+
+  it('reports week-over-week change as a whole percent', () => {
+    expect(weekChange(30, 60)).toBe(-50);
+    expect(weekChange(90, 60)).toBe(50);
+  });
+
+  it('has no change figure without last week or when last week was zero', () => {
+    expect(weekChange(30, null)).toBeNull();
+    expect(weekChange(30, 0)).toBeNull();
+  });
+});
 
 describe('buildSnapshot', () => {
   const label = (pkg: string) => pkg.toUpperCase();

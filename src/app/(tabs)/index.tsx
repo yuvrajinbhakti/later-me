@@ -2,6 +2,7 @@ import { router } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { currentMilestone, focusQuest, nextTask, questProgress, todayTasks } from '../../domain/quests';
 import { formatPercent } from '../../domain/format';
+import { AttentionCard } from '../../features/attention/AttentionCard';
 import { PermissionsBanner } from '../../features/permissions/PermissionsBanner';
 import { EmptyQuests } from '../../features/quests/EmptyQuests';
 import { useTaskToggle } from '../../features/quests/useTaskToggle';
@@ -106,6 +107,12 @@ export default function HomeScreen() {
           ) : null}
         </>
       )}
+
+      {state.quests.length > 0 ? (
+        <Section>
+          <AttentionCard limit={state.settings.dailyLimitMinutes} />
+        </Section>
+      ) : null}
     </Screen>
   );
 }

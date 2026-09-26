@@ -105,6 +105,22 @@ export function dailyMinutes(intervals: Interval[], days: number, todayStart: nu
   });
 }
 
+export function twoHourBuckets(hourly: number[]): number[] {
+  return Array.from({ length: 12 }, (_, i) => (hourly[i * 2] ?? 0) + (hourly[i * 2 + 1] ?? 0));
+}
+
+const WEEKDAYS = ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'];
+
+/** Oldest to today, matching dailyMinutes. */
+export function weekdayLabels(todayStart: number, days: number): string[] {
+  return Array.from({ length: days }, (_, idx) => WEEKDAYS[new Date(dayStartOffset(todayStart, idx - (days - 1))).getDay()]);
+}
+
+export function weekChange(thisWeek: number, lastWeek: number | null): number | null {
+  if (lastWeek === null || lastWeek <= 0) return null;
+  return Math.round(((thisWeek - lastWeek) / lastWeek) * 100);
+}
+
 const sumWindow = (intervals: Interval[], from: number, to: number) =>
   intervals.reduce((sum, i) => sum + overlapMinutes(i, from, to), 0);
 

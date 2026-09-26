@@ -11,6 +11,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, type ReactNode } from 'react';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { UsageProvider } from '../features/attention/UsageProvider';
 import { AppStoreProvider, useAppStore } from '../store/AppStore';
 import { colors } from '../ui/theme';
 
@@ -30,14 +31,16 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <AppStoreProvider>
         <WhenReady fontsReady={loaded || !!error}>
-          <StatusBar style="light" />
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: colors.bg },
-              animation: 'slide_from_right',
-            }}
-          />
+          <UsageProvider>
+            <StatusBar style="light" />
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: colors.bg },
+                animation: 'slide_from_right',
+              }}
+            />
+          </UsageProvider>
         </WhenReady>
       </AppStoreProvider>
     </SafeAreaProvider>

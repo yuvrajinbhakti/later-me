@@ -152,7 +152,8 @@ function contextFor(quest: Quest): QuestContext {
   const task = nextTask(quest);
   return {
     title: quest.title,
-    task: task?.title ?? 'your next step',
+    // With every task ticked there is no next step to quote, so lines name the quest instead.
+    task: task?.title ?? quest.title,
     est: task?.minutes ? `${task.minutes} minutes` : null,
     deadline: formatDate(parseLocalDate(quest.targetDate)),
   };
