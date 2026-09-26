@@ -89,3 +89,4 @@ If Attention shows zero usage on an emulator that definitely has some, check `ad
 
 - Set Later Me's battery usage to Unrestricted, or the OS may stop the watcher.
 - Gentle callouts are notifications, so they need notification permission. Normal and savage use the overlay and fall back to a notification without it.
+# later-me
