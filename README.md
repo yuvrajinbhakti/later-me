@@ -20,8 +20,9 @@ The UI follows the Questify design (dark surfaces, one violet accent for "you ar
 | Daily limit: one callout per day when crossed | ✅ |
 | "Not today" pause, alerts on/off, restart after reboot or app update | ✅ |
 | Upgrade from the Phase 1 build keeps the goal and its step progress | ✅ |
+| Draft with AI: milestones and tasks from the goal, date and hours (Claude Sonnet 5, your own API key) | ✅ key in Android Keystore, no server |
 | iOS (Screen Time `FamilyControls` shield) | ⏳ needs Xcode; request the Family Controls entitlement early |
-| AI roadmap generation, accounts, focus timer, XP and achievements | ⏳ later cycles |
+| AI-written callouts, accounts, focus timer, XP and achievements | ⏳ later cycles |
 
 ## Architecture
 
@@ -38,8 +39,10 @@ src/
     usage.ts                raw usage events → intervals, opens, hourly, daily, snapshot
     migration.ts            Phase 1 data → v2 state; tolerant parsing
     permissions.ts          what each sarcasm level needs
+    roadmap.ts              AI draft: request, response cleanup, error messages
   store/                    reducer, persistence, provider (syncs the watcher)
   watcher/config.ts         AppState → native config; dedupes pushes
+  ai/                       Anthropic Messages API client; API key in SecureStore
   features/                 hooks and composite components
   ui/                       design system primitives
 modules/usage-stats/        local Expo module (Kotlin)
@@ -85,6 +88,10 @@ On a phone, Accountability → Permissions has a button for each.
 The emulator has no Instagram. In Accountability, turn on Chrome under Tracked apps and pick the dev-only **30 s** alert-after, then open Chrome and wait. Dev builds also offer a **1m** daily limit.
 
 If Attention shows zero usage on an emulator that definitely has some, check `adb shell dumpsys usagestats | head -12`. A `timeRange` in the future means the emulator's clock jumped at some point and Android's usage store is stuck in that period. Only a fresh AVD fixes it.
+
+### Draft with AI
+
+Paste an Anthropic API key (console.anthropic.com → API keys) under Accountability → AI drafting. The Steps screen of a new quest then offers **Draft with AI**, which sends the quest's name, why, target date and hours per week to Claude and fills in editable milestones plus a one-line read on whether the timeline is realistic. A draft costs a few cents at most.
 
 ### Real-phone notes
 

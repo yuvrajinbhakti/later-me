@@ -1,7 +1,10 @@
 import { router } from 'expo-router';
-import { useState } from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { useApiKey } from '../../ai/apiKey';
+import { requestRoadmap } from '../../ai/roadmapClient';
 import { createQuest, makeId, validateDraft } from '../../domain/quests';
+import { RoadmapError, hasDraftSteps } from '../../domain/roadmap';
 import { blankMilestone, useDraft, type DraftMilestone } from '../../features/create/DraftContext';
 import { useAppStore } from '../../store/AppStore';
 import { Button } from '../../ui/Button';
@@ -36,6 +39,44 @@ export default function DefineStepsScreen() {
   };
   const remove = (index: number) => setMilestones(milestones.filter((_, i) => i !== index));
 
+  const { key: apiKey } = useApiKey();
+  const [drafting, setDrafting] = useState(false);
+  const [aiNote, setAiNote] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const inFlight = useRef<AbortController | null>(null);
+  useEffect(() => () => inFlight.current?.abort(), []);
+
+  const runDraft = async () => {
+    if (!apiKey) return;
+    const controller = new AbortController();
+    inFlight.current = controller;
+    setError(null);
+    setAiError(null);
+    setAiNote(null);
+    setDrafting(true);
+    try {
+      const roadmap = await requestRoadmap(draft, apiKey, { signal: controller.signal });
+      setMilestones(roadmap.milestones);
+      setAiNote(roadmap.note);
+    } catch (e) {
+      if (controller.signal.aborted) return;
+      setAiError(e instanceof RoadmapError ? e.message : 'Something went wrong. Try again.');
+    } finally {
+      if (!controller.signal.aborted) setDrafting(false);
+    }
+  };
+
+  const onDraft = () => {
+    if (!hasDraftSteps(milestones)) {
+      void runDraft();
+      return;
+    }
+    Alert.alert('Replace your steps?', 'The AI draft replaces the milestones you have typed.', [
+      { text: 'Keep mine', style: 'cancel' },
+      { text: 'Replace', style: 'destructive', onPress: () => void runDraft() },
+    ]);
+  };
+
   const onCreate = () => {
     const problem = validateDraft(draft);
     if (problem) {
@@ -64,6 +105,34 @@ export default function DefineStepsScreen() {
       <Text variant="body" style={styles.lede}>
         Each milestone is a few concrete tasks. Add minutes where you can: callouts use them to price what scrolling cost.
       </Text>
+
+      <Card style={styles.ai}>
+        <View style={styles.aiHead}>
+          <Icon name="spark" size={18} color={colors.accent} />
+          <Text variant="label">Not sure where to start?</Text>
+        </View>
+        {apiKey ? (
+          <>
+            <Text variant="cap">
+              {drafting
+                ? 'Drafting from your goal, date and hours. This can take half a minute.'
+                : 'Draft milestones from your goal, date and hours. Everything stays editable.'}
+            </Text>
+            <Button kind="secondary" icon="spark" label="Draft with AI" loading={drafting} onPress={onDraft} style={styles.aiBtn} />
+          </>
+        ) : (
+          <>
+            <Text variant="cap">Add your Anthropic API key in Accountability to draft milestones with AI.</Text>
+            <Button kind="tertiary" small label="Add API key" onPress={() => router.push('/accountability')} style={styles.aiLink} />
+          </>
+        )}
+        {aiError ? (
+          <Text variant="cap" color={colors.danger} style={styles.aiMsg} accessibilityLiveRegion="polite">{aiError}</Text>
+        ) : null}
+        {aiNote ? (
+          <Text variant="cap" color={colors.text} style={styles.aiMsg} accessibilityLiveRegion="polite">{aiNote}</Text>
+        ) : null}
+      </Card>
 
       {milestones.map((m, mi) => (
         <Card key={mi} style={styles.milestone}>
@@ -153,6 +222,11 @@ function SmallIcon({ icon, label, onPress, disabled }: { icon: IconName; label: 
 
 const styles = StyleSheet.create({
   lede: { marginTop: 8, marginBottom: 8 },
+  ai: { marginTop: 12, gap: 8 },
+  aiHead: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  aiBtn: { marginTop: 4 },
+  aiLink: { alignSelf: 'flex-start', paddingHorizontal: 4 },
+  aiMsg: { marginTop: 2 },
   milestone: { marginTop: 16 },
   headRow: { flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: 8 },
   grow: { flex: 1 },

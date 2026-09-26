@@ -31,7 +31,8 @@
           "image": "./assets/splash-icon.png",
           "imageWidth": 150
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "web": {
       "favicon": "./assets/favicon.png"

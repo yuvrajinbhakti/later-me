@@ -15,6 +15,7 @@ import {
   type DailyLimit,
   type SarcasmLevel,
 } from '../domain/types';
+import { ApiKeySection } from '../features/ai/ApiKeySection';
 import { KNOWN_APPS, appLabel } from '../features/attention/appLabels';
 import { PERMISSION_NAMES } from '../features/permissions/PermissionsBanner';
 import { usePermissions } from '../features/permissions/usePermissions';
@@ -200,6 +201,8 @@ export default function AccountabilityScreen() {
         {paused ? <Text variant="cap" style={styles.pausedText}>Callouts are paused until {formatClock(new Date(pausedUntil))}.</Text> : null}
         <Button kind="secondary" label={paused ? 'Resume callouts' : 'Pause until midnight'} onPress={togglePause} />
       </Section>
+
+      <ApiKeySection />
     </Screen>
   );
 }

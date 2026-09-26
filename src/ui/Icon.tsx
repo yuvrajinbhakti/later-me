@@ -31,6 +31,7 @@ const ICONS = {
   more: [['circle', 5, 12, 1.2], ['circle', 12, 12, 1.2], ['circle', 19, 12, 1.2]],
   pause: [['path', 'M9 5v14M15 5v14']],
   play: [['path', 'M7 4.5 19 12 7 19.5v-15Z']],
+  spark: [['path', 'M12 4l2 6 6 2-6 2-2 6-2-6-6-2 6-2 2-6Z']],
 } satisfies Record<string, Shape[]>;
 
 export type IconName = keyof typeof ICONS;
