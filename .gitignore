@@ -43,3 +43,6 @@ yarn-error.*
 # native module build output
 modules/**/android/build/
 modules/**/.cxx/
+
+# build artifacts handed out manually
+*.apk
