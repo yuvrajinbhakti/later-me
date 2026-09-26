@@ -4,29 +4,52 @@ import { requireNativeModule } from 'expo';
 export interface WatcherConfig {
   /** Android package names to watch, e.g. ["com.instagram.android"] */
   watchedPackages: string[];
-  /** Continuous foreground seconds on a watched app before the overlay fires. */
+  /** Continuous foreground seconds on a watched app before a callout fires. */
   thresholdSeconds: number;
-  /** Seconds after a dismissal before the overlay may fire again. */
+  /** Seconds between escalating callouts, and after a dismissal. */
   cooldownSeconds: number;
-  /** Short goal label shown on the overlay ("backend engineer by Dec"). */
+  /** Focus quest title shown on the overlay. */
   goalLabel: string;
+  /** gentle = notification; normal / savage = overlay (falls back to a notification without overlay access). */
+  sarcasmLevel: 'gentle' | 'normal' | 'savage';
+  /** 0 means no daily limit. */
+  dailyLimitMinutes: number;
+  /** Focus quest's target date at local midnight, for {daysLeft}; 0 with no focus quest. */
+  targetDateMs: number;
 }
 
 /**
- * Roast lines by escalation tier: tiers[0] = dry, tiers[1] = pointed,
- * tiers[2] = intervention. Lines may contain {sessionMinutes}, which the
- * native side fills at display time; everything else must be pre-filled.
+ * tiers[0..2] escalate within a session; limit fires once when the daily limit is crossed.
+ * {sessionMinutes}, {todayMinutes} and {daysLeft} are filled natively when a callout fires.
  */
-export type RoastTiers = string[][];
+export interface RoastPayload {
+  tiers: string[][];
+  limit: string[];
+}
+
+export interface UsageEventRecord {
+  pkg: string;
+  type: 'resumed' | 'paused';
+  ts: number;
+}
+
+export interface UsageEventsResult {
+  events: UsageEventRecord[];
+  /** Earliest event of any app in the queried range; null when the platform kept nothing. */
+  historyStartMs: number | null;
+}
 
 interface NativeUsageStats {
   hasUsageAccess(): boolean;
   openUsageAccessSettings(): void;
   hasOverlayPermission(): boolean;
   openOverlaySettings(): void;
+  canPostCallouts(): boolean;
+  openNotificationSettings(): void;
   getUsageToday(packages: string[]): Promise<Record<string, number>>;
+  getUsageEvents(beginMs: number, endMs: number, packages: string[]): Promise<UsageEventsResult>;
   getForegroundApp(): Promise<string | null>;
-  startWatcher(configJson: string, roastsJson: string): void;
+  startWatcher(configJson: string, roastsJson: string): boolean;
   stopWatcher(): void;
   isWatcherRunning(): boolean;
   setRoasts(roastsJson: string): void;
@@ -38,7 +61,7 @@ const native: NativeUsageStats | null =
   Platform.OS === 'android' ? requireNativeModule<NativeUsageStats>('UsageStats') : null;
 
 const notAndroid = () => {
-  throw new Error('UsageStats is Android-only for now (iOS = Phase 2, Screen Time API).');
+  throw new Error('UsageStats is Android-only for now.');
 };
 
 export const UsageStats = {
@@ -48,24 +71,27 @@ export const UsageStats = {
   openUsageAccessSettings: (): void => (native ? native.openUsageAccessSettings() : notAndroid()),
   hasOverlayPermission: (): boolean => (native ? native.hasOverlayPermission() : false),
   openOverlaySettings: (): void => (native ? native.openOverlaySettings() : notAndroid()),
+  canPostCallouts: (): boolean => (native ? native.canPostCallouts() : false),
+  openNotificationSettings: (): void => (native ? native.openNotificationSettings() : notAndroid()),
 
   /** Minutes of foreground time today, keyed by package name. */
   getUsageToday: (packages: string[]): Promise<Record<string, number>> =>
     native ? native.getUsageToday(packages) : Promise.resolve({}),
 
-  getForegroundApp: (): Promise<string | null> =>
-    native ? native.getForegroundApp() : Promise.resolve(null),
+  getUsageEvents: (beginMs: number, endMs: number, packages: string[]): Promise<UsageEventsResult> =>
+    native ? native.getUsageEvents(beginMs, endMs, packages) : Promise.resolve({ events: [], historyStartMs: null }),
 
-  startWatcher: (config: WatcherConfig, roasts: RoastTiers): void =>
-    native ? native.startWatcher(JSON.stringify(config), JSON.stringify(roasts)) : notAndroid(),
-  stopWatcher: (): void => (native ? native.stopWatcher() : notAndroid()),
+  getForegroundApp: (): Promise<string | null> => (native ? native.getForegroundApp() : Promise.resolve(null)),
+
+  /** false when the platform refused to start the service. */
+  startWatcher: (config: WatcherConfig, roasts: RoastPayload): boolean =>
+    native ? native.startWatcher(JSON.stringify(config), JSON.stringify(roasts)) : false,
+  stopWatcher: (): void => (native ? native.stopWatcher() : undefined),
   isWatcherRunning: (): boolean => (native ? native.isWatcherRunning() : false),
 
-  setRoasts: (roasts: RoastTiers): void =>
-    native ? native.setRoasts(JSON.stringify(roasts)) : notAndroid(),
+  setRoasts: (roasts: RoastPayload): void => (native ? native.setRoasts(JSON.stringify(roasts)) : undefined),
 
-  /** "Not today": silence the watcher until epochMs. Pass 0 to resume. */
-  setPausedUntil: (epochMs: number): void =>
-    native ? native.setPausedUntil(epochMs) : notAndroid(),
+  /** "Not today": silence callouts until epochMs. Pass 0 to resume. */
+  setPausedUntil: (epochMs: number): void => (native ? native.setPausedUntil(epochMs) : undefined),
   getPausedUntil: (): number => (native ? native.getPausedUntil() : 0),
 };

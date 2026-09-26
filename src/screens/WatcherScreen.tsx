@@ -80,8 +80,11 @@ export function WatcherScreen() {
         thresholdSeconds: s.thresholdSeconds,
         cooldownSeconds: s.cooldownSeconds,
         goalLabel: goal?.aim ?? '',
+        sarcasmLevel: 'normal',
+        dailyLimitMinutes: 0,
+        targetDateMs: 0,
       },
-      roasts
+      { tiers: roasts, limit: [] }
     );
     setTimeout(refresh, 500);
   };

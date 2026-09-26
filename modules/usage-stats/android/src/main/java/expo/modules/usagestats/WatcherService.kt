@@ -10,25 +10,26 @@ import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import kotlin.math.roundToLong
 import kotlin.random.Random
 
 /**
- * Foreground service that polls the current foreground app every POLL_MS and,
- * once a watched app has been continuously in front for the configured
- * threshold, slaps a full-screen sarcastic overlay on top of it.
- *
- * Runs entirely natively — no JS needed — so it survives the RN app being
- * swiped away from recents.
+ * Polls usage events every POLL_MS on its own thread and, when TriggerPolicy says so, delivers a
+ * callout as a full-screen overlay or a notification. Runs without JS, so it survives the app
+ * being swiped away; BootReceiver restarts it after a reboot or an app update.
  */
 class WatcherService : Service() {
 
@@ -37,26 +38,47 @@ class WatcherService : Service() {
       private set
 
     private const val POLL_MS = 5000L
+    private const val LIMIT_RECOMPUTE_MS = 60_000L
+    private const val DAY_MS = 24 * 60 * 60 * 1000L
+    private const val PRIME_WINDOW_MS = 60 * 60 * 1000L
     private const val CHANNEL_ID = "later_me_watcher"
     private const val NOTIFICATION_ID = 4242
+    private const val CALLOUT_NOTIFICATION_ID = 5100
+
+    private val BG = Color.parseColor("#F20B0D12")
+    private val TEXT = Color.parseColor("#F5F7FA")
+    private val TEXT_2 = Color.parseColor("#9AA3B2")
+    private val ACCENT = Color.parseColor("#8B7CFF")
+    private val ON_ACCENT = Color.parseColor("#0B0D12")
+    private val SARCASM = Color.parseColor("#FF7A59")
   }
 
-  private val handler = Handler(Looper.getMainLooper())
-  private var overlayView: View? = null
+  private val mainHandler = Handler(Looper.getMainLooper())
+  private lateinit var tickThread: HandlerThread
+  private lateinit var tickHandler: Handler
 
-  // Session tracking
-  private var currentWatched: String? = null
-  private var continuousMs = 0L
-  private var lastTickAt = 0L
-  private var cooldownUntil = 0L
-  private var sessionTriggers = 0
+  // Touched only on the tick thread.
+  private val session = WatcherSession()
+  private val tracker = ForegroundTracker()
+  private var primed = false
+  private var lastQueryMs = 0L
+  private var lastTickMs = 0L
+  private var todayTrackedMs = 0L
+  private var todayTrackedAt = 0L
+  private var todayTrackedDay = ""
+
+  // overlayView is touched only on the main thread; overlayShowing is read by the tick thread.
+  private var overlayView: View? = null
+  @Volatile private var overlayShowing = false
 
   private val ticker = object : Runnable {
     override fun run() {
       try {
         tick()
+      } catch (e: Exception) {
+        // A failed tick (revoked access, OEM quirk) must not stop the watcher.
       } finally {
-        handler.postDelayed(this, POLL_MS)
+        tickHandler.postDelayed(this, POLL_MS)
       }
     }
   }
@@ -66,160 +88,202 @@ class WatcherService : Service() {
   override fun onCreate() {
     super.onCreate()
     isRunning = true
-    createChannel()
+    createChannels()
+    tickThread = HandlerThread("LaterMeWatcher").also { it.start() }
+    tickHandler = Handler(tickThread.looper)
   }
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     startInForeground()
-    lastTickAt = System.currentTimeMillis()
-    handler.removeCallbacks(ticker)
-    handler.post(ticker)
+    tickHandler.removeCallbacks(ticker)
+    tickHandler.post {
+      val now = System.currentTimeMillis()
+      if (!primed) {
+        tracker.apply(UsageQueries.fgEvents(this, now - PRIME_WINDOW_MS, now))
+        lastQueryMs = now
+        primed = true
+      }
+      lastTickMs = now
+      session.start(now)
+    }
+    tickHandler.post(ticker)
     return START_STICKY
   }
 
   override fun onDestroy() {
-    handler.removeCallbacks(ticker)
-    removeOverlay()
+    tickHandler.removeCallbacksAndMessages(null)
+    tickThread.quitSafely()
+    hideOverlay()
     isRunning = false
     super.onDestroy()
   }
 
-  // ---- Core loop ----
+  // ---- Core loop (tick thread) ----
 
   private fun tick() {
     val now = System.currentTimeMillis()
+    val delta = now - lastTickMs
+    lastTickMs = now
     val config = Prefs.getConfig(this)
+    val pausedUntil = Prefs.getPausedUntil(this)
 
-    // "Not today" pause: stand down completely.
-    if (Prefs.getPausedUntil(this) > now) {
-      resetSession()
-      removeOverlay()
+    if (pausedUntil > now) {
+      session.reset()
+      mainHandler.post { hideOverlay() }
       return
     }
 
-    val fg = try {
-      UsageQueries.foregroundApp(this)
-    } catch (e: Exception) {
-      null // usage access revoked mid-run, etc.
-    }
-    android.util.Log.d("LaterMe", "tick fg=$fg watched=$currentWatched continuousMs=$continuousMs")
+    tracker.apply(UsageQueries.fgEvents(this, lastQueryMs, now))
+    lastQueryMs = now
+    val dayKey = UsageQueries.dayKey(now)
+    session.onTick(now, tracker.current, tracker.screenOff, dayKey, config.watchedPackages, packageName)
 
-    if (fg != null && fg in config.watchedPackages) {
-      if (fg == currentWatched) {
-        continuousMs += now - lastTickAt
+    val inTracked = session.currentPkg != null
+    if (!inTracked && overlayShowing) mainHandler.post { hideOverlay() }
+
+    val limitFiredToday = Prefs.getLimitFiredDay(this) == dayKey
+    if (config.dailyLimitMinutes > 0 && inTracked && !limitFiredToday) {
+      if (todayTrackedDay != dayKey || now - todayTrackedAt >= LIMIT_RECOMPUTE_MS) {
+        todayTrackedMs = UsageQueries.trackedTodayMs(this, config.watchedPackages.toSet(), now)
+        todayTrackedAt = now
+        todayTrackedDay = dayKey
       } else {
-        currentWatched = fg
-        continuousMs = 0L
-        sessionTriggers = 0
+        todayTrackedMs += delta
       }
-      val thresholdMs = config.thresholdSeconds * 1000L
-      if (continuousMs >= thresholdMs && now >= cooldownUntil && overlayView == null) {
-        showOverlay(config)
-      }
-    } else if (fg != null && fg != packageName) {
-      // User genuinely left the watched app for another app — session over.
-      // (Our own overlay does not change the foreground app, and `fg == null`
-      // just means no recent events, so both leave the session alone.)
-      resetSession()
-      removeOverlay()
     }
-    lastTickAt = now
+
+    val decision = TriggerPolicy.decide(
+      TriggerInput(
+        nowMs = now,
+        inTrackedApp = inTracked,
+        continuousMs = session.continuousMs,
+        thresholdMs = (config.thresholdSeconds * 1000).roundToLong(),
+        cooldownUntilMs = session.cooldownUntilMs,
+        overlayShowing = overlayShowing,
+        todayTrackedMs = todayTrackedMs,
+        dailyLimitMs = config.dailyLimitMinutes * 60_000L,
+        dailyLimitFiredToday = limitFiredToday,
+        pausedUntilMs = pausedUntil,
+      ),
+    )
+    val cooldownMs = config.cooldownSeconds * 1000L
+    val pools = Prefs.getRoastPools(this)
+
+    when (decision) {
+      TriggerKind.CONTINUOUS -> {
+        val tier = TriggerPolicy.tier(session.sessionTriggers)
+        val line = pick(pools.tiers.getOrNull(minOf(tier, pools.tiers.size - 1)))
+        deliver(config, headlineFor(tier), line, dismissLabelFor(tier), now)
+        session.onCallout(now, cooldownMs)
+      }
+      TriggerKind.DAILY_LIMIT -> {
+        deliver(config, "Daily limit reached.", pick(pools.limit), "I know, keep going", now)
+        session.onLimitCallout(now, cooldownMs)
+        Prefs.setLimitFiredDay(this, dayKey)
+      }
+      TriggerKind.NONE -> Unit
+    }
   }
 
-  private fun resetSession() {
-    currentWatched = null
-    continuousMs = 0L
-    sessionTriggers = 0
+  private fun pick(lines: List<String>?): String =
+    if (lines.isNullOrEmpty()) "That's {sessionMinutes} minutes of scrolling. Your quest sends its regards."
+    else lines[Random.nextInt(lines.size)]
+
+  private fun headlineFor(tier: Int) = when (tier) {
+    0 -> "Still here?"
+    1 -> "Again."
+    else -> "Okay. Intervention."
   }
 
-  // ---- Overlay ----
+  private fun dismissLabelFor(tier: Int) = when (tier) {
+    0 -> "5 more minutes (sure)"
+    1 -> "keep scrolling, I guess"
+    else -> "I have made my choice"
+  }
 
-  private fun showOverlay(config: WatcherConfig) {
+  private fun fill(template: String, config: WatcherConfig, now: Long): String {
+    val sessionMin = (session.continuousMs / 60_000L).coerceAtLeast(1L)
+    val todayMin = UsageQueries.trackedTodayMs(this, config.watchedPackages.toSet(), now) / 60_000L
+    // Rounding over midnights absorbs DST's 23/25-hour days.
+    val daysLeft = if (config.targetDateMs > 0) {
+      Math.round((config.targetDateMs - UsageQueries.localMidnight(now)).toDouble() / DAY_MS).coerceAtLeast(0L)
+    } else {
+      0L
+    }
+    return template
+      .replace("{sessionMinutes}", sessionMin.toString())
+      .replace("{todayMinutes}", todayMin.toString())
+      .replace("{daysLeft}", daysLeft.toString())
+  }
+
+  private fun deliver(config: WatcherConfig, headline: String, template: String, dismissLabel: String, now: Long) {
+    val text = fill(template, config, now)
+    val cooldownMs = config.cooldownSeconds * 1000L
+    when (TriggerPolicy.delivery(config.sarcasmLevel, Settings.canDrawOverlays(this))) {
+      Delivery.OVERLAY -> {
+        overlayShowing = true
+        mainHandler.post { showOverlay(headline, text, config.goalLabel, dismissLabel, cooldownMs) }
+      }
+      Delivery.NOTIFICATION -> postCallout(headline, text)
+    }
+  }
+
+  // ---- Overlay (main thread) ----
+
+  private fun showOverlay(headline: String, text: String, goalLabel: String, dismissLabel: String, cooldownMs: Long) {
+    if (overlayView != null) return
     val wm = getSystemService(WINDOW_SERVICE) as WindowManager
-
-    val tier = minOf(sessionTriggers, 2)
-    sessionTriggers += 1
-    val roast = pickRoast(tier)
-
     val dp = resources.displayMetrics.density
-    fun pad(v: Int) = (v * dp).toInt()
+    fun px(v: Int) = (v * dp).toInt()
 
     val root = LinearLayout(this).apply {
       orientation = LinearLayout.VERTICAL
       gravity = Gravity.CENTER
-      setBackgroundColor(Color.parseColor("#F20B0B10"))
-      setPadding(pad(28), pad(28), pad(28), pad(28))
+      setBackgroundColor(BG)
+      setPadding(px(28), px(28), px(28), px(28))
     }
 
-    fun text(value: String, sizeSp: Float, color: Int, bold: Boolean = false, topMargin: Int = 0) =
+    fun label(value: String, sizeSp: Float, color: Int, bold: Boolean = false, top: Int = 0) =
       TextView(this).apply {
-        text = value
+        this.text = value
         setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
         setTextColor(color)
         gravity = Gravity.CENTER
         if (bold) typeface = Typeface.DEFAULT_BOLD
+        setLineSpacing(0f, 1.2f)
         layoutParams = LinearLayout.LayoutParams(
           LinearLayout.LayoutParams.MATCH_PARENT,
-          LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { setMargins(0, pad(topMargin), 0, 0) }
+          LinearLayout.LayoutParams.WRAP_CONTENT,
+        ).apply { setMargins(0, px(top), 0, 0) }
       }
 
-    val sessionMin = (continuousMs / 60000L).toInt().coerceAtLeast(1)
-    val headline = when (tier) {
-      0 -> "👀 Still here?"
-      1 -> "🙃 Again."
-      else -> "💀 Okay. Intervention."
-    }
+    root.addView(label("Observation", 13f, SARCASM, bold = true).apply { letterSpacing = 0.06f })
+    root.addView(label(headline, 30f, TEXT, bold = true, top = 10))
+    root.addView(label(text, 18f, TEXT, top = 18))
+    if (goalLabel.isNotBlank()) root.addView(label("Focus quest · $goalLabel", 13f, TEXT_2, top = 16))
 
-    root.addView(text(headline, 30f, Color.WHITE, bold = true))
-    root.addView(
-      text(
-        roast.replace("{sessionMinutes}", sessionMin.toString()),
-        19f, Color.parseColor("#E8E8F0"), topMargin = 20
-      )
-    )
-    if (config.goalLabel.isNotBlank()) {
-      root.addView(
-        text(
-          "Remember: “${config.goalLabel}”",
-          14f, Color.parseColor("#9A9AAE"), topMargin = 16
-        )
-      )
-    }
-
-    // Primary: leave the app.
-    val leaveBtn = text("Fine, I'm out →", 18f, Color.parseColor("#0B0B10"), bold = true, topMargin = 32).apply {
-      setBackgroundColor(Color.parseColor("#7CF29C"))
-      setPadding(pad(20), pad(14), pad(20), pad(14))
+    root.addView(label("Fine, I'm out", 17f, ON_ACCENT, bold = true, top = 36).apply {
+      background = GradientDrawable().apply {
+        setColor(ACCENT)
+        cornerRadius = 12 * dp
+      }
+      setPadding(px(20), px(15), px(20), px(15))
       setOnClickListener {
-        removeOverlay()
-        resetSession()
-        cooldownUntil = System.currentTimeMillis() + config.cooldownSeconds * 1000L
-        startActivity(
-          Intent(Intent.ACTION_MAIN)
-            .addCategory(Intent.CATEGORY_HOME)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
+        hideOverlay()
+        val at = System.currentTimeMillis()
+        tickHandler.post { session.onLeave(at, cooldownMs) }
+        startActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
       }
-    }
-    root.addView(leaveBtn)
+    })
 
-    // Secondary: dismiss, with shame.
-    val dismissLabel = when (tier) {
-      0 -> "5 more minutes (sure)"
-      1 -> "keep scrolling, I guess"
-      else -> "I have made my choice"
-    }
-    val dismissBtn = text(dismissLabel, 14f, Color.parseColor("#8888A0"), topMargin = 18).apply {
-      setPadding(pad(12), pad(10), pad(12), pad(10))
+    root.addView(label(dismissLabel, 14f, TEXT_2, top = 14).apply {
+      setPadding(px(12), px(12), px(12), px(12))
       setOnClickListener {
-        removeOverlay()
-        // Keep the session counter — next trigger escalates.
-        continuousMs = 0L
-        cooldownUntil = System.currentTimeMillis() + config.cooldownSeconds * 1000L
+        hideOverlay()
+        val at = System.currentTimeMillis()
+        tickHandler.post { session.onDismiss(at, cooldownMs) }
       }
-    }
-    root.addView(dismissBtn)
+    })
 
     val params = WindowManager.LayoutParams(
       WindowManager.LayoutParams.MATCH_PARENT,
@@ -227,20 +291,21 @@ class WatcherService : Service() {
       if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
       else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
       WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-      PixelFormat.TRANSLUCENT
+      PixelFormat.TRANSLUCENT,
     )
-
     try {
       wm.addView(root, params)
       overlayView = root
     } catch (e: Exception) {
-      // Overlay permission revoked — nothing to do until re-granted.
+      overlayShowing = false
     }
   }
 
-  private fun removeOverlay() {
-    val view = overlayView ?: return
+  private fun hideOverlay() {
+    val view = overlayView
     overlayView = null
+    overlayShowing = false
+    if (view == null) return
     try {
       (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(view)
     } catch (e: Exception) {
@@ -248,48 +313,51 @@ class WatcherService : Service() {
     }
   }
 
-  private fun pickRoast(tier: Int): String {
-    val tiers = Prefs.getRoastTiers(this)
-    val fallback = "That's {sessionMinutes} min of scrolling. Your goal sends its regards."
-    if (tiers.isEmpty()) return fallback
-    val lines = tiers.getOrNull(tier.coerceAtMost(tiers.size - 1)) ?: return fallback
-    if (lines.isEmpty()) return fallback
-    return lines[Random.nextInt(lines.size)]
+  // ---- Notifications ----
+
+  private fun createChannels() {
+    if (Build.VERSION.SDK_INT < 26) return
+    val nm = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+    nm.createNotificationChannel(
+      NotificationChannel(CHANNEL_ID, "Distraction watcher", NotificationManager.IMPORTANCE_LOW).apply {
+        description = "Persistent notification while Later Me is watching for doom-scrolling."
+      },
+    )
+    nm.createNotificationChannel(
+      NotificationChannel(Permissions.CALLOUT_CHANNEL_ID, "Callouts", NotificationManager.IMPORTANCE_HIGH).apply {
+        description = "Gentle-level callouts, and callouts when the overlay is not allowed."
+      },
+    )
   }
 
-  // ---- Foreground notification ----
+  private fun builder(channel: String): Notification.Builder =
+    if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, channel) else @Suppress("DEPRECATION") Notification.Builder(this)
 
-  private fun createChannel() {
-    if (Build.VERSION.SDK_INT >= 26) {
-      val channel = NotificationChannel(
-        CHANNEL_ID, "Distraction watcher", NotificationManager.IMPORTANCE_LOW
-      ).apply { description = "Persistent notification while Later Me is watching for doom-scrolling." }
-      (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(channel)
-    }
+  private fun openAppIntent(): PendingIntent? = packageManager.getLaunchIntentForPackage(packageName)?.let {
+    PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+  }
+
+  private fun postCallout(headline: String, text: String) {
+    if (!Permissions.canPostCallouts(this)) return
+    val notification = builder(Permissions.CALLOUT_CHANNEL_ID)
+      .setContentTitle(headline)
+      .setContentText(text)
+      .setStyle(Notification.BigTextStyle().bigText(text))
+      .setSmallIcon(applicationInfo.icon)
+      .setContentIntent(openAppIntent())
+      .setAutoCancel(true)
+      .build()
+    (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).notify(CALLOUT_NOTIFICATION_ID, notification)
   }
 
   private fun startInForeground() {
-    val launchIntent = packageManager.getLaunchIntentForPackage(packageName)
-    val contentIntent = launchIntent?.let {
-      PendingIntent.getActivity(
-        this, 0, it,
-        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-      )
-    }
-
-    val builder = if (Build.VERSION.SDK_INT >= 26) {
-      Notification.Builder(this, CHANNEL_ID)
-    } else {
-      @Suppress("DEPRECATION") Notification.Builder(this)
-    }
-    val notification = builder
-      .setContentTitle("Later Me is watching 👀")
+    val notification = builder(CHANNEL_ID)
+      .setContentTitle("Later Me is watching")
       .setContentText("Doom-scroll and find out.")
       .setSmallIcon(applicationInfo.icon)
-      .setContentIntent(contentIntent)
+      .setContentIntent(openAppIntent())
       .setOngoing(true)
       .build()
-
     if (Build.VERSION.SDK_INT >= 34) {
       startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
     } else {

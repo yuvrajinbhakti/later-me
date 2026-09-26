@@ -1,5 +1,6 @@
-import { RoastTiers } from '../modules/usage-stats';
 import { formatDate, projectEta } from './eta';
+
+type RoastTiers = string[][];
 import { Goal } from './types';
 
 /**
