@@ -75,6 +75,7 @@ cd android && ./gradlew :usage-stats:testDebugUnitTest
 adb shell appops set com.yuvraj.laterme android:get_usage_stats allow
 adb shell appops set com.yuvraj.laterme SYSTEM_ALERT_WINDOW allow
 adb shell pm grant com.yuvraj.laterme android.permission.POST_NOTIFICATIONS
+adb shell dumpsys deviceidle whitelist +com.yuvraj.laterme
 ```
 
 On a phone, Accountability → Permissions has a button for each.
@@ -87,6 +88,6 @@ If Attention shows zero usage on an emulator that definitely has some, check `ad
 
 ### Real-phone notes
 
-- Set Later Me's battery usage to Unrestricted, or the OS may stop the watcher.
+- Allow Unrestricted battery, or the OS may stop the watcher. While alerts are on, Home asks until you allow it. Xiaomi, Oppo and Vivo also hide an Autostart switch in their security app, and it needs to be on.
 - Gentle callouts are notifications, so they need notification permission. Normal and savage use the overlay and fall back to a notification without it.
 # later-me

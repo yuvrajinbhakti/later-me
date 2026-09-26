@@ -7,6 +7,7 @@ const read = (): PermissionState => ({
   usage: UsageStats.hasUsageAccess(),
   overlay: UsageStats.hasOverlayPermission(),
   notifications: UsageStats.canPostCallouts(),
+  battery: UsageStats.isBatteryUnrestricted(),
 });
 
 /** Re-reads whenever the app returns to the foreground, i.e. after a trip to Settings. */
@@ -38,5 +39,6 @@ export function usePermissions() {
     requestNotifications,
     openUsageSettings: UsageStats.openUsageAccessSettings,
     openOverlaySettings: UsageStats.openOverlaySettings,
+    openBatterySettings: UsageStats.openBatterySettings,
   };
 }

@@ -47,7 +47,7 @@ export default function HomeScreen() {
 
   return (
     <Screen inTabs header={header} overlay={<Toast message={toast.message} aboveTabs />}>
-      <PermissionsBanner level={state.settings.sarcasmLevel} />
+      <PermissionsBanner level={state.settings.sarcasmLevel} alertsEnabled={state.settings.alertsEnabled} />
 
       {state.quests.length === 0 ? (
         <EmptyQuests />

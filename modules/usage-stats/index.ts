@@ -46,6 +46,8 @@ interface NativeUsageStats {
   openOverlaySettings(): void;
   canPostCallouts(): boolean;
   openNotificationSettings(): void;
+  isBatteryUnrestricted(): boolean;
+  openBatterySettings(): void;
   getUsageEvents(beginMs: number, endMs: number, packages: string[]): Promise<UsageEventsResult>;
   startWatcher(configJson: string, roastsJson: string): boolean;
   stopWatcher(): void;
@@ -72,6 +74,9 @@ export const UsageStats = {
   openOverlaySettings: (): void => (native ? native.openOverlaySettings() : notAndroid()),
   canPostCallouts: (): boolean => (native ? native.canPostCallouts() : false),
   openNotificationSettings: (): void => (native ? native.openNotificationSettings() : notAndroid()),
+  /** True when Android exempts the app from battery optimisation, so the watcher is not stopped. */
+  isBatteryUnrestricted: (): boolean => (native ? native.isBatteryUnrestricted() : false),
+  openBatterySettings: (): void => (native ? native.openBatterySettings() : notAndroid()),
 
   getUsageEvents: (beginMs: number, endMs: number, packages: string[]): Promise<UsageEventsResult> =>
     native ? native.getUsageEvents(beginMs, endMs, packages) : Promise.resolve({ events: [], historyStartMs: null }),

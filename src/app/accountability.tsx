@@ -174,7 +174,14 @@ export default function AccountabilityScreen() {
         <Card>
           <PermissionRow name={PERMISSION_NAMES.usage} granted={perms.usage} onFix={perms.openUsageSettings} />
           <PermissionRow name={PERMISSION_NAMES.overlay} granted={perms.overlay} onFix={perms.openOverlaySettings} />
-          <PermissionRow name={PERMISSION_NAMES.notifications} granted={perms.notifications} onFix={perms.requestNotifications} last />
+          <PermissionRow name={PERMISSION_NAMES.notifications} granted={perms.notifications} onFix={perms.requestNotifications} />
+          <PermissionRow
+            name={PERMISSION_NAMES.battery}
+            hint="Stops Android pausing the watcher"
+            granted={perms.battery}
+            onFix={perms.openBatterySettings}
+            last
+          />
         </Card>
       </Section>
 
@@ -197,10 +204,23 @@ export default function AccountabilityScreen() {
   );
 }
 
-function PermissionRow({ name, granted, onFix, last }: { name: string; granted: boolean; onFix: () => void; last?: boolean }) {
+function PermissionRow({
+  name,
+  hint,
+  granted,
+  onFix,
+  last,
+}: {
+  name: string;
+  hint?: string;
+  granted: boolean;
+  onFix: () => void;
+  last?: boolean;
+}) {
   return (
     <Row
       label={name}
+      sublabel={hint}
       right={granted ? <Chip label="On" tone="mint" /> : <Button small label="Turn on" onPress={onFix} />}
       last={last}
     />

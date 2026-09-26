@@ -4,6 +4,7 @@ import android.app.AppOpsManager
 import android.app.NotificationManager
 import android.content.Context
 import android.os.Build
+import android.os.PowerManager
 import android.os.Process
 
 object Permissions {
@@ -27,5 +28,11 @@ object Permissions {
       if (channel != null && channel.importance == NotificationManager.IMPORTANCE_NONE) return false
     }
     return true
+  }
+
+  /** Doze and OEM battery savers stop the watcher service unless the app is exempt. */
+  fun isBatteryUnrestricted(context: Context): Boolean {
+    val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+    return pm.isIgnoringBatteryOptimizations(context.packageName)
   }
 }

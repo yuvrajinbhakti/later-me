@@ -1,5 +1,6 @@
 package expo.modules.usagestats
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -40,6 +41,17 @@ class UsageStatsModule : Module() {
         Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
       }
       open(intent)
+    }
+
+    Function("isBatteryUnrestricted") { Permissions.isBatteryUnrestricted(context) }
+
+    /** The one-tap system prompt; some OEM builds strip it, so fall back to the full exemption list. */
+    Function("openBatterySettings") {
+      try {
+        open(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${context.packageName}")))
+      } catch (e: ActivityNotFoundException) {
+        open(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+      }
     }
 
     // ---- Usage queries ----
