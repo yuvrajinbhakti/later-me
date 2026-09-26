@@ -10,6 +10,14 @@ import {
 import { emptyState } from '../domain/quests';
 import type { AppState } from '../domain/types';
 
+/**
+ * Whether a Phase 1 user had the watcher on. Installing an update kills the service, so a live
+ * check alone is always false on the first launch after upgrading; the saved config survives it.
+ */
+export function legacyWatcherWasOn(native: { isWatcherRunning(): boolean; hasSavedWatcherConfig(): boolean }): boolean {
+  return native.isWatcherRunning() || native.hasSavedWatcherConfig();
+}
+
 export async function loadAppState(
   now: Date,
   makeId: () => string,

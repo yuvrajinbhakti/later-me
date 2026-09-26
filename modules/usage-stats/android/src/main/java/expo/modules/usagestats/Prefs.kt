@@ -27,6 +27,7 @@ object Prefs {
   private fun sp(context: Context): SharedPreferences = context.getSharedPreferences(NAME, Context.MODE_PRIVATE)
 
   fun setConfig(context: Context, json: String) = sp(context).edit().putString(KEY_CONFIG, json).apply()
+  fun hasConfig(context: Context): Boolean = sp(context).contains(KEY_CONFIG)
 
   fun getConfig(context: Context): WatcherConfig {
     val raw = sp(context).getString(KEY_CONFIG, null) ?: return WatcherConfig()

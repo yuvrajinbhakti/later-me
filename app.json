@@ -2,11 +2,12 @@
   "expo": {
     "name": "Later Me",
     "slug": "later-me",
+    "scheme": "laterme",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
-    "backgroundColor": "#0B0B10",
+    "backgroundColor": "#0B0D12",
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.yuvraj.laterme"
@@ -21,6 +22,17 @@
       },
       "predictiveBackGestureEnabled": false
     },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0B0D12",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 120
+        }
+      ]
+    ],
     "web": {
       "favicon": "./assets/favicon.png"
     }

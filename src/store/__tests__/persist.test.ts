@@ -4,7 +4,7 @@ jest.mock('@react-native-async-storage/async-storage', () =>
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { LEGACY_GOAL_KEY, STATE_KEY } from '../../domain/migration';
-import { loadAppState, saveAppState } from '../persist';
+import { legacyWatcherWasOn, loadAppState, saveAppState } from '../persist';
 
 const NOW = new Date(2026, 8, 26, 12, 0);
 const makeId = (() => {
@@ -53,6 +53,16 @@ it('loads what was saved', async () => {
   const s = await loadAppState(NOW, makeId, opts);
   await saveAppState({ ...s, settings: { ...s.settings, sarcasmLevel: 'savage' } });
   expect((await loadAppState(NOW, makeId, opts)).settings.sarcasmLevel).toBe('savage');
+});
+
+describe('legacyWatcherWasOn', () => {
+  // Installing an update kills the service, so on the first launch after upgrading it never runs.
+  it('counts a saved Phase 1 watcher config even though the upgrade stopped the service', () =>
+    expect(legacyWatcherWasOn({ isWatcherRunning: () => false, hasSavedWatcherConfig: () => true })).toBe(true));
+  it('is on when the service is running', () =>
+    expect(legacyWatcherWasOn({ isWatcherRunning: () => true, hasSavedWatcherConfig: () => false })).toBe(true));
+  it('is off when the watcher was never started', () =>
+    expect(legacyWatcherWasOn({ isWatcherRunning: () => false, hasSavedWatcherConfig: () => false })).toBe(false));
 });
 
 it('snaps dev-only settings when loading in a production build', async () => {

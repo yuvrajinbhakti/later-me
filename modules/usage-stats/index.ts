@@ -52,6 +52,7 @@ interface NativeUsageStats {
   startWatcher(configJson: string, roastsJson: string): boolean;
   stopWatcher(): void;
   isWatcherRunning(): boolean;
+  hasSavedWatcherConfig(): boolean;
   setRoasts(roastsJson: string): void;
   setPausedUntil(epochMs: number): void;
   getPausedUntil(): number;
@@ -88,6 +89,8 @@ export const UsageStats = {
     native ? native.startWatcher(JSON.stringify(config), JSON.stringify(roasts)) : false,
   stopWatcher: (): void => (native ? native.stopWatcher() : undefined),
   isWatcherRunning: (): boolean => (native ? native.isWatcherRunning() : false),
+  /** True once startWatcher has ever run on this install, including Phase 1 builds. */
+  hasSavedWatcherConfig: (): boolean => (native ? native.hasSavedWatcherConfig() : false),
 
   setRoasts: (roasts: RoastPayload): void => (native ? native.setRoasts(JSON.stringify(roasts)) : undefined),
 

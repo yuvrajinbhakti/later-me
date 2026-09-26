@@ -79,6 +79,8 @@ class UsageStatsModule : Module() {
 
     Function("isWatcherRunning") { WatcherService.isRunning }
 
+    Function("hasSavedWatcherConfig") { Prefs.hasConfig(context) }
+
     /** Refresh callout lines without restarting the service. */
     Function("setRoasts") { roastsJson: String -> Prefs.setRoasts(context, roastsJson) }
 
