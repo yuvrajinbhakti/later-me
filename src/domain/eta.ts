@@ -1,8 +1,6 @@
-import { daysBetween, parseLocalDate } from './format';
-import { nextTask } from './quests';
+import { DAY_MS, daysBetween, parseLocalDate } from './format';
+import { allTasks, nextTask } from './quests';
 import type { Quest } from './types';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface Projection {
   doneTasks: number;
@@ -14,7 +12,7 @@ export interface Projection {
 
 /** Deliberately crude: extrapolates the ticking pace since the quest was created. */
 export function projectQuest(q: Quest, now: Date): Projection {
-  const tasks = q.milestones.flatMap((m) => m.tasks);
+  const tasks = allTasks(q);
   const doneTasks = tasks.filter((t) => t.done).length;
   const totalTasks = tasks.length;
   const remaining = totalTasks - doneTasks;

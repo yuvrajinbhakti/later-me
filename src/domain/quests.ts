@@ -44,7 +44,7 @@ export function validateDraft(draft: QuestDraft): string | null {
   return null;
 }
 
-const allTasks = (q: Quest): Task[] => q.milestones.flatMap((m) => m.tasks);
+export const allTasks = (q: Quest): Task[] => q.milestones.flatMap((m) => m.tasks);
 
 export function questProgress(q: Quest): number {
   const tasks = allTasks(q);
@@ -97,7 +97,7 @@ export function focusQuest(s: AppState): Quest | null {
   return s.quests.find((q) => q.id === s.focusQuestId) ?? null;
 }
 
-function newestActiveId(quests: Quest[], excludeId: string | null): string | null {
+export function newestActiveId(quests: Quest[], excludeId: string | null): string | null {
   const candidates = quests.filter((q) => q.status === 'active' && q.id !== excludeId);
   if (candidates.length === 0) return null;
   return candidates.reduce((a, b) => (b.createdAt > a.createdAt ? b : a)).id;

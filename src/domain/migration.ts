@@ -1,5 +1,5 @@
-import { toLocalYmd } from './format';
-import { addQuest, emptyState } from './quests';
+import { monthsFromNow, toLocalYmd } from './format';
+import { addQuest, emptyState, newestActiveId } from './quests';
 import {
   ALERT_AFTER_OPTIONS,
   DEFAULT_SETTINGS,
@@ -37,7 +37,7 @@ function tryParse(raw: string | null): unknown {
 function legacyYmd(iso: unknown, now: Date): string {
   if (isString(iso) && iso.endsWith('T00:00:00.000Z')) return iso.slice(0, 10);
   const d = isString(iso) ? new Date(iso) : new Date(NaN);
-  if (Number.isNaN(d.getTime())) return toLocalYmd(new Date(now.getFullYear(), now.getMonth() + 3, now.getDate()));
+  if (Number.isNaN(d.getTime())) return monthsFromNow(now, 3);
   return toLocalYmd(d);
 }
 
@@ -175,15 +175,13 @@ export function parseState(raw: string | null): { state: AppState | null; corrup
   const quests = Array.isArray(value.quests)
     ? value.quests.map(parseQuest).filter((q): q is Quest => q !== null)
     : [];
-  const active = quests.filter((q) => q.status === 'active');
-  const stored = active.find((q) => q.id === value.focusQuestId);
-  const newest = active.reduce<Quest | null>((a, b) => (!a || b.createdAt > a.createdAt ? b : a), null);
+  const stored = quests.find((q) => q.status === 'active' && q.id === value.focusQuestId);
 
   return {
     state: {
       version: 2,
       quests,
-      focusQuestId: (stored ?? newest)?.id ?? null,
+      focusQuestId: stored?.id ?? newestActiveId(quests, null),
       settings: parseSettings(value.settings),
     },
     corrupt: false,

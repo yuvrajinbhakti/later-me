@@ -73,43 +73,38 @@ export default function QuestsScreen() {
               const pct = questProgress(q);
               const isFocus = state.focusQuestId === q.id;
               return (
-                <Pressable
+                <Card
                   key={q.id}
                   onPress={() => router.push(`/quest/${q.id}`)}
                   onLongPress={() => setOptions(q)}
-                  accessibilityRole="button"
                   accessibilityLabel={`${q.title}. ${formatPercent(pct)} percent.${isFocus ? ' Focus quest.' : ''}`}
                   accessibilityHint="Long press for options"
                 >
-                  {({ pressed }) => (
-                    <Card style={pressed ? styles.cardPressed : undefined}>
-                      <View style={styles.rowTop}>
-                        <Text variant="title" style={styles.grow} numberOfLines={2}>{q.title}</Text>
-                        {isFocus ? <Chip label="Focus" tone="accent" /> : null}
-                        <Pressable
-                          onPress={() => setOptions(q)}
-                          accessibilityRole="button"
-                          accessibilityLabel={`Options for ${q.title}`}
-                          hitSlop={8}
-                          style={styles.more}
-                        >
-                          <Icon name="more" size={20} color={colors.muted} />
-                        </Pressable>
-                      </View>
-                      <Text variant="cap" style={styles.due}>
-                        {q.status === 'completed' && q.completedAt
-                          ? `Completed ${formatDate(new Date(q.completedAt))}`
-                          : `Due ${formatDate(parseLocalDate(q.targetDate))}`}
-                      </Text>
-                      <View style={styles.progressRow}>
-                        <View style={styles.grow}>
-                          <ProgressBar value={pct} tone={q.status === 'completed' ? 'mint' : 'accent'} />
-                        </View>
-                        <Text variant="cap" num style={styles.pct}>{formatPercent(pct)}%</Text>
-                      </View>
-                    </Card>
-                  )}
-                </Pressable>
+                  <View style={styles.rowTop}>
+                    <Text variant="title" style={styles.grow} numberOfLines={2}>{q.title}</Text>
+                    {isFocus ? <Chip label="Focus" tone="accent" /> : null}
+                    <Pressable
+                      onPress={() => setOptions(q)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Options for ${q.title}`}
+                      hitSlop={8}
+                      style={styles.more}
+                    >
+                      <Icon name="more" size={20} color={colors.muted} />
+                    </Pressable>
+                  </View>
+                  <Text variant="cap" style={styles.due}>
+                    {q.status === 'completed' && q.completedAt
+                      ? `Completed ${formatDate(new Date(q.completedAt))}`
+                      : `Due ${formatDate(parseLocalDate(q.targetDate))}`}
+                  </Text>
+                  <View style={styles.progressRow}>
+                    <View style={styles.grow}>
+                      <ProgressBar value={pct} tone={q.status === 'completed' ? 'mint' : 'accent'} />
+                    </View>
+                    <Text variant="cap" num style={styles.pct}>{formatPercent(pct)}%</Text>
+                  </View>
+                </Card>
               );
             })}
           </View>
@@ -128,7 +123,6 @@ const styles = StyleSheet.create({
   due: { marginTop: 4 },
   progressRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginTop: 14 },
   pct: { minWidth: 38, textAlign: 'right', color: colors.text },
-  cardPressed: { borderColor: colors.muted, transform: [{ scale: 0.985 }] },
   fab: {
     position: 'absolute',
     right: pad,

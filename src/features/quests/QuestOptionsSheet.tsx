@@ -27,7 +27,7 @@ export function QuestOptionsSheet({ quest, onClose, onDeleted }: QuestOptionsShe
   };
 
   return (
-    <Sheet visible={!!quest} onClose={onClose} title={confirmDelete ? 'Delete this quest?' : quest.title}>
+    <Sheet visible onClose={onClose} title={confirmDelete ? 'Delete this quest?' : quest.title}>
       {confirmDelete ? (
         <View>
           <Text variant="body">Its milestones and ticked tasks go with it. This can't be undone.</Text>

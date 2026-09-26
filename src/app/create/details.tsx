@@ -1,7 +1,7 @@
 import { DateTimePickerAndroid } from '@react-native-community/datetimepicker';
 import { router } from 'expo-router';
 import { Pressable, StyleSheet, View } from 'react-native';
-import { formatDate, parseLocalDate, toLocalYmd } from '../../domain/format';
+import { dayStartOffset, formatDate, monthsFromNow, parseLocalDate, toLocalYmd } from '../../domain/format';
 import { useDraft } from '../../features/create/DraftContext';
 import { Button } from '../../ui/Button';
 import { Card } from '../../ui/Card';
@@ -19,21 +19,15 @@ const QUICK = [
   { label: '+6 months', months: 6 },
 ];
 
-const inMonths = (months: number) => {
-  const now = new Date();
-  return toLocalYmd(new Date(now.getFullYear(), now.getMonth() + months, now.getDate()));
-};
-
 export default function GoalDetailsScreen() {
   const { draft, update } = useDraft();
   const target = parseLocalDate(draft.targetDate);
 
   const pickDate = () => {
-    const now = new Date();
     DateTimePickerAndroid.open({
       value: target,
       mode: 'date',
-      minimumDate: new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1),
+      minimumDate: new Date(dayStartOffset(Date.now(), 1)),
       onValueChange: (_event, date) => update({ targetDate: toLocalYmd(date) }),
     });
   };
@@ -69,11 +63,11 @@ export default function GoalDetailsScreen() {
         </Card>
         <View style={styles.quick}>
           {QUICK.map((q) => {
-            const selected = draft.targetDate === inMonths(q.months);
+            const selected = draft.targetDate === monthsFromNow(new Date(), q.months);
             return (
               <Pressable
                 key={q.label}
-                onPress={() => update({ targetDate: inMonths(q.months) })}
+                onPress={() => update({ targetDate: monthsFromNow(new Date(), q.months) })}
                 accessibilityRole="button"
                 accessibilityLabel={`Target ${q.label}`}
                 style={[styles.chip, selected && styles.chipOn]}

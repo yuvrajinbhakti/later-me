@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.graphics.Color
@@ -37,6 +38,17 @@ class WatcherService : Service() {
     @Volatile var isRunning = false
       private set
 
+    const val CALLOUT_CHANNEL_ID = "later_me_callouts"
+
+    /** False when the platform refuses the start (e.g. from the background on Android 12+). */
+    fun start(context: Context): Boolean = try {
+      val intent = Intent(context, WatcherService::class.java)
+      if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
+      true
+    } catch (e: Exception) {
+      false
+    }
+
     private const val POLL_MS = 5000L
     private const val LIMIT_RECOMPUTE_MS = 60_000L
     private const val DAY_MS = 24 * 60 * 60 * 1000L
@@ -66,6 +78,8 @@ class WatcherService : Service() {
   private var todayTrackedMs = 0L
   private var todayTrackedAt = 0L
   private var todayTrackedDay = ""
+  private var configRaw: String? = null
+  private var config = WatcherConfig()
 
   // overlayView is touched only on the main thread; overlayShowing is read by the tick thread.
   private var overlayView: View? = null
@@ -124,7 +138,11 @@ class WatcherService : Service() {
     val now = System.currentTimeMillis()
     val delta = now - lastTickMs
     lastTickMs = now
-    val config = Prefs.getConfig(this)
+    val raw = Prefs.getConfigRaw(this)
+    if (raw != configRaw) {
+      config = Prefs.parseConfig(raw)
+      configRaw = raw
+    }
     val pausedUntil = Prefs.getPausedUntil(this)
 
     if (pausedUntil > now) {
@@ -136,7 +154,7 @@ class WatcherService : Service() {
     tracker.apply(UsageQueries.fgEvents(this, lastQueryMs, now))
     lastQueryMs = now
     val dayKey = UsageQueries.dayKey(now)
-    session.onTick(now, tracker.current, tracker.screenOff, dayKey, config.watchedPackages, packageName)
+    session.onTick(now, tracker.current, tracker.screenOff, dayKey, config.watchedSet, packageName)
 
     val inTracked = session.currentPkg != null
     if (!inTracked && overlayShowing) mainHandler.post { hideOverlay() }
@@ -144,7 +162,7 @@ class WatcherService : Service() {
     val limitFiredToday = Prefs.getLimitFiredDay(this) == dayKey
     if (config.dailyLimitMinutes > 0 && inTracked && !limitFiredToday) {
       if (todayTrackedDay != dayKey || now - todayTrackedAt >= LIMIT_RECOMPUTE_MS) {
-        todayTrackedMs = UsageQueries.trackedTodayMs(this, config.watchedPackages.toSet(), now)
+        todayTrackedMs = UsageQueries.trackedTodayMs(this, config.watchedSet, now)
         todayTrackedAt = now
         todayTrackedDay = dayKey
       } else {
@@ -167,17 +185,17 @@ class WatcherService : Service() {
       ),
     )
     val cooldownMs = config.cooldownSeconds * 1000L
-    val pools = Prefs.getRoastPools(this)
 
     when (decision) {
       TriggerKind.CONTINUOUS -> {
+        val tiers = Prefs.getRoastPools(this).tiers
         val tier = TriggerPolicy.tier(session.sessionTriggers)
-        val line = pick(pools.tiers.getOrNull(minOf(tier, pools.tiers.size - 1)))
-        deliver(config, headlineFor(tier), line, dismissLabelFor(tier), now)
+        val line = pick(tiers.getOrNull(minOf(tier, tiers.size - 1)))
+        deliver(config, headlineFor(tier), line, dismissLabelFor(tier), now, cooldownMs)
         session.onCallout(now, cooldownMs)
       }
       TriggerKind.DAILY_LIMIT -> {
-        deliver(config, "Daily limit reached.", pick(pools.limit), "I know, keep going", now)
+        deliver(config, "Daily limit reached.", pick(Prefs.getRoastPools(this).limit), "I know, keep going", now, cooldownMs)
         session.onLimitCallout(now, cooldownMs)
         Prefs.setLimitFiredDay(this, dayKey)
       }
@@ -203,7 +221,8 @@ class WatcherService : Service() {
 
   private fun fill(template: String, config: WatcherConfig, now: Long): String {
     val sessionMin = (session.continuousMs / 60_000L).coerceAtLeast(1L)
-    val todayMin = UsageQueries.trackedTodayMs(this, config.watchedPackages.toSet(), now) / 60_000L
+    // Today's total is a 36-hour event scan; skip it for lines that don't quote it.
+    val todayMin = if ("{todayMinutes}" in template) UsageQueries.trackedTodayMs(this, config.watchedSet, now) / 60_000L else 0L
     // Rounding over midnights absorbs DST's 23/25-hour days.
     val daysLeft = if (config.targetDateMs > 0) {
       Math.round((config.targetDateMs - UsageQueries.localMidnight(now)).toDouble() / DAY_MS).coerceAtLeast(0L)
@@ -213,9 +232,8 @@ class WatcherService : Service() {
     return CalloutText.fill(template, sessionMin, todayMin, daysLeft)
   }
 
-  private fun deliver(config: WatcherConfig, headline: String, template: String, dismissLabel: String, now: Long) {
+  private fun deliver(config: WatcherConfig, headline: String, template: String, dismissLabel: String, now: Long, cooldownMs: Long) {
     val text = fill(template, config, now)
-    val cooldownMs = config.cooldownSeconds * 1000L
     when (TriggerPolicy.delivery(config.sarcasmLevel, Settings.canDrawOverlays(this))) {
       Delivery.OVERLAY -> {
         overlayShowing = true
@@ -321,7 +339,7 @@ class WatcherService : Service() {
       },
     )
     nm.createNotificationChannel(
-      NotificationChannel(Permissions.CALLOUT_CHANNEL_ID, "Callouts", NotificationManager.IMPORTANCE_HIGH).apply {
+      NotificationChannel(CALLOUT_CHANNEL_ID, "Callouts", NotificationManager.IMPORTANCE_HIGH).apply {
         description = "Gentle-level callouts, and callouts when the overlay is not allowed."
       },
     )
@@ -336,7 +354,7 @@ class WatcherService : Service() {
 
   private fun postCallout(headline: String, text: String) {
     if (!Permissions.canPostCallouts(this)) return
-    val notification = builder(Permissions.CALLOUT_CHANNEL_ID)
+    val notification = builder(CALLOUT_CHANNEL_ID)
       .setContentTitle(headline)
       .setContentText(text)
       .setStyle(Notification.BigTextStyle().bigText(text))

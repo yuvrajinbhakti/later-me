@@ -21,32 +21,38 @@ const StoreContext = createContext<AppStore | null>(null);
 export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, undefined, emptyState);
   const [ready, setReady] = useState(false);
+  // False when loading failed: the UI still opens, but defaults must never overwrite stored quests.
+  const [loaded, setLoaded] = useState(false);
   const [lastSync, setLastSync] = useState<AppStore['lastSync']>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
   useEffect(() => {
     loadAppState(new Date(), makeId, { watcherRunning: legacyWatcherWasOn(UsageStats), isDev: __DEV__ })
-      .then((loaded) => dispatch({ type: 'hydrate', state: loaded }))
+      .then((stored) => {
+        dispatch({ type: 'hydrate', state: stored });
+        setLoaded(true);
+      })
       .catch(() => undefined)
       .finally(() => setReady(true));
   }, []);
 
-  // Nothing is saved or pushed to the watcher before hydration, so defaults never overwrite real data.
   useEffect(() => {
-    if (!ready) return;
+    if (!loaded) return;
     saveAppState(state).catch(() => undefined);
     setLastSync(syncWatcher(state));
-  }, [state, ready]);
+  }, [state, loaded]);
 
   useEffect(() => {
     const sub = RNAppState.addEventListener('change', (next) => {
-      if (next === 'active' && ready) setLastSync(syncWatcher(stateRef.current));
+      if (next === 'active' && loaded) setLastSync(syncWatcher(stateRef.current));
     });
     return () => sub.remove();
-  }, [ready]);
+  }, [loaded]);
 
-  const resync = () => setLastSync(syncWatcher(stateRef.current));
+  const resync = () => {
+    if (loaded) setLastSync(syncWatcher(stateRef.current));
+  };
 
   return (
     <StoreContext.Provider value={{ state, ready, dispatch, lastSync, resync }}>{children}</StoreContext.Provider>

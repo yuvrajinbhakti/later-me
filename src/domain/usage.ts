@@ -1,10 +1,9 @@
+import type { UsageEventRecord } from '../../modules/usage-stats';
+import { dayStartOffset, startOfLocalDay } from './format';
 import type { AppUsage } from './types';
 
-export interface RawUsageEvent {
-  pkg: string;
-  type: 'resumed' | 'paused';
-  ts: number;
-}
+export type RawUsageEvent = UsageEventRecord;
+export { startOfLocalDay };
 
 export interface Interval {
   pkg: string;
@@ -25,16 +24,6 @@ export interface UsageSnapshotData {
 export const MERGE_GAP_MS = 5000;
 const MINUTE_MS = 60_000;
 
-export function startOfLocalDay(ts: number): number {
-  const d = new Date(ts);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
-}
-
-const dayStartOffset = (todayStart: number, offsetDays: number) => {
-  const d = new Date(todayStart);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + offsetDays).getTime();
-};
-
 export function toIntervals(events: RawUsageEvent[], now: number): Interval[] {
   const raw: Interval[] = [];
   const open = new Map<string, number>();
@@ -52,7 +41,11 @@ export function toIntervals(events: RawUsageEvent[], now: number): Interval[] {
   open.forEach((start, pkg) => raw.push({ pkg, start, end: now }));
 
   const byPkg = new Map<string, Interval[]>();
-  raw.forEach((i) => byPkg.set(i.pkg, [...(byPkg.get(i.pkg) ?? []), i]));
+  raw.forEach((i) => {
+    const list = byPkg.get(i.pkg);
+    if (list) list.push(i);
+    else byPkg.set(i.pkg, [i]);
+  });
   const merged: Interval[] = [];
   byPkg.forEach((list) => {
     list.sort((a, b) => a.start - b.start);
@@ -87,21 +80,22 @@ export function minutesByPackage(intervals: Interval[], from: number, to: number
   return out;
 }
 
+const sumWindow = (intervals: Interval[], from: number, to: number) =>
+  intervals.reduce((sum, i) => sum + overlapMinutes(i, from, to), 0);
+
 export function hourlyMinutes(intervals: Interval[], dayStart: number): number[] {
   const d = new Date(dayStart);
   return Array.from({ length: 24 }, (_, h) => {
     const from = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h).getTime();
     const to = new Date(d.getFullYear(), d.getMonth(), d.getDate(), h + 1).getTime();
-    return intervals.reduce((sum, i) => sum + overlapMinutes(i, from, to), 0);
+    return sumWindow(intervals, from, to);
   });
 }
 
 export function dailyMinutes(intervals: Interval[], days: number, todayStart: number): number[] {
   return Array.from({ length: days }, (_, idx) => {
     const offset = idx - (days - 1);
-    const from = dayStartOffset(todayStart, offset);
-    const to = dayStartOffset(todayStart, offset + 1);
-    return intervals.reduce((sum, i) => sum + overlapMinutes(i, from, to), 0);
+    return sumWindow(intervals, dayStartOffset(todayStart, offset), dayStartOffset(todayStart, offset + 1));
   });
 }
 
@@ -120,9 +114,6 @@ export function weekChange(thisWeek: number, lastWeek: number | null): number | 
   if (lastWeek === null || lastWeek <= 0) return null;
   return Math.round(((thisWeek - lastWeek) / lastWeek) * 100);
 }
-
-const sumWindow = (intervals: Interval[], from: number, to: number) =>
-  intervals.reduce((sum, i) => sum + overlapMinutes(i, from, to), 0);
 
 export function buildSnapshot(
   events: RawUsageEvent[],

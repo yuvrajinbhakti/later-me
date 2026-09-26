@@ -26,6 +26,8 @@ export default function AttentionScreen() {
   const topMinutes = Math.max(...usage.apps.map((a) => a.minutes), 1);
   const observation = observationLine(usage.apps);
   const change = weekChange(usage.thisWeek, usage.lastWeek);
+  const improving = usage.lastWeek !== null && usage.thisWeek <= usage.lastWeek;
+  const trendColor = improving ? colors.mint : colors.sarcasm;
 
   const header = (
     <TopBar
@@ -64,7 +66,7 @@ export default function AttentionScreen() {
         {usage.apps.map((a) => (
           <Pressable
             key={a.pkg}
-            onPress={() => router.push(`/app-usage/${encodeURIComponent(a.pkg)}`)}
+            onPress={() => router.push({ pathname: '/app-usage/[pkg]', params: { pkg: a.pkg } })}
             accessibilityRole="button"
             accessibilityLabel={`${a.label}: ${formatMinutes(a.minutes)}, ${a.opens} opens today`}
             style={({ pressed }) => [styles.hbar, pressed && styles.pressed]}
@@ -76,9 +78,7 @@ export default function AttentionScreen() {
                 <Icon name="next" size={14} color={colors.muted} />
               </View>
             </View>
-            <View style={styles.track}>
-              <View style={[styles.fill, { width: `${(a.minutes / topMinutes) * 100}%` }]} />
-            </View>
+            <ProgressBar value={a.minutes / topMinutes} tone="sarcasm" tall />
           </Pressable>
         ))}
       </Section>
@@ -105,9 +105,9 @@ export default function AttentionScreen() {
                   <Text style={styles.compareVal} color={colors.text2} num>{formatMinutes(usage.lastWeek)}</Text>
                   <Text variant="meta">Last week</Text>
                 </View>
-                <Icon name={usage.thisWeek <= usage.lastWeek ? 'down' : 'up'} size={20} color={usage.thisWeek <= usage.lastWeek ? colors.mint : colors.sarcasm} />
+                <Icon name={improving ? 'down' : 'up'} size={20} color={trendColor} />
                 <View style={styles.compareCell}>
-                  <Text style={styles.compareVal} color={usage.thisWeek <= usage.lastWeek ? colors.mint : colors.sarcasm} num>
+                  <Text style={styles.compareVal} color={trendColor} num>
                     {formatMinutes(usage.thisWeek)}
                   </Text>
                   <Text variant="meta">This week</Text>
@@ -138,8 +138,6 @@ const styles = StyleSheet.create({
   hbarHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 },
   hbarName: { fontFamily: fonts.medium, fontSize: 14, color: colors.text },
   hbarRight: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  track: { height: 8, borderRadius: radius.pill, backgroundColor: colors.border, overflow: 'hidden' },
-  fill: { height: '100%', borderRadius: radius.pill, backgroundColor: colors.sarcasm },
   jab: {
     padding: 16,
     borderRadius: radius.l,

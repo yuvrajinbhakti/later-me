@@ -32,14 +32,14 @@ export default function MilestoneDetailScreen() {
   const pct = milestoneProgress(milestone);
   const done = milestone.tasks.filter((t) => t.done).length;
   const minutesLeft = milestone.tasks.filter((t) => !t.done).reduce((sum, t) => sum + (t.minutes ?? 0), 0);
-  const state_ = milestoneState(quest, milestone);
+  const position = milestoneState(quest, milestone);
 
   return (
     <Screen
       header={<TopBar onBack={() => router.back()} title={quest.title} />}
       overlay={<Toast message={toast.message} />}
     >
-      {state_ === 'done' ? <Chip label="Done" tone="mint" /> : state_ === 'current' ? <Chip label="You are here" tone="accent" /> : null}
+      {position === 'done' ? <Chip label="Done" tone="mint" /> : position === 'current' ? <Chip label="You are here" tone="accent" /> : null}
       <Text variant="hLg" style={styles.title} accessibilityRole="header">{milestone.title}</Text>
       <View style={styles.meta}>
         <Text variant="cap" num>{done} of {milestone.tasks.length} done</Text>

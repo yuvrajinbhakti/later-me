@@ -6,18 +6,22 @@ export interface CardProps {
   children: ReactNode;
   elevated?: boolean;
   onPress?: () => void;
+  onLongPress?: () => void;
   accessibilityLabel?: string;
+  accessibilityHint?: string;
   style?: ViewStyle;
 }
 
-export function Card({ children, elevated, onPress, accessibilityLabel, style }: CardProps) {
+export function Card({ children, elevated, onPress, onLongPress, accessibilityLabel, accessibilityHint, style }: CardProps) {
   const box = [styles.card, elevated && styles.elevated, style];
   if (!onPress) return <View style={box}>{children}</View>;
   return (
     <Pressable
       onPress={onPress}
+      onLongPress={onLongPress}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
+      accessibilityHint={accessibilityHint}
       style={({ pressed }) => [...box, pressed && styles.pressed]}
     >
       {children}

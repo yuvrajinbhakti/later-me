@@ -25,8 +25,7 @@ const hourName = (bucket: number) => {
 const DAY_NAMES: Record<string, string> = { Su: 'Sunday', Mo: 'Monday', Tu: 'Tuesday', We: 'Wednesday', Th: 'Thursday', Fr: 'Friday', Sa: 'Saturday' };
 
 export default function AppUsageScreen() {
-  const { pkg: raw } = useLocalSearchParams<{ pkg: string }>();
-  const pkg = decodeURIComponent(raw ?? '');
+  const { pkg = '' } = useLocalSearchParams<{ pkg: string }>();
   const { state } = useAppStore();
   const usage = useUsageSnapshot();
   const label = appLabel(pkg);

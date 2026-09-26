@@ -65,9 +65,7 @@ export default function QuestDetailScreen() {
         <QuestOptionsSheet quest={optionsOpen ? quest : null} onClose={() => setOptionsOpen(false)} onDeleted={() => router.back()} />
       }
     >
-      <View style={styles.titleRow}>
-        <Text variant="hLg" style={styles.grow} accessibilityRole="header">{quest.title}</Text>
-      </View>
+      <Text variant="hLg" accessibilityRole="header">{quest.title}</Text>
       {quest.status !== 'active' ? (
         <View style={styles.status}>
           <Chip label={quest.status === 'paused' ? 'Paused' : 'Completed'} tone={quest.status === 'completed' ? 'mint' : 'neutral'} />
@@ -114,8 +112,6 @@ function Stat({ label, value, color }: { label: string; value: string; color?: s
 }
 
 const styles = StyleSheet.create({
-  titleRow: { flexDirection: 'row' },
-  grow: { flex: 1 },
   status: { marginTop: 10 },
   bigRow: { flexDirection: 'row', alignItems: 'baseline', marginTop: 20, marginBottom: 12 },
   pctSign: { marginLeft: 2 },

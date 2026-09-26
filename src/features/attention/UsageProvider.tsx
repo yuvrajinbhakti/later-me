@@ -1,15 +1,14 @@
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { AppState as RNAppState } from 'react-native';
 import { UsageStats } from '../../../modules/usage-stats';
-import { buildSnapshot, startOfLocalDay, type RawUsageEvent, type UsageSnapshotData } from '../../domain/usage';
+import { dayStartOffset, startOfLocalDay } from '../../domain/format';
+import { buildSnapshot, type RawUsageEvent, type UsageSnapshotData } from '../../domain/usage';
 import { useAppStore } from '../../store/AppStore';
 import { appLabel } from './appLabels';
 
 export interface UsageSnapshot extends UsageSnapshotData {
-  loading: boolean;
   /** Usage access missing or the query failed: screens show the permissions state instead of zeros. */
   error: boolean;
-  refresh: () => Promise<void>;
 }
 
 const POLL_MS = 30_000;
@@ -36,7 +35,6 @@ export function UsageProvider({ children }: { children: ReactNode }) {
   const packages = state.settings.trackedPackages;
   const key = packages.join(',');
   const [data, setData] = useState<UsageSnapshotData>(() => emptySnapshot(packages));
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const history = useRef<HistoryCache | null>(null);
 
@@ -51,18 +49,16 @@ export function UsageProvider({ children }: { children: ReactNode }) {
         return;
       }
       if (!history.current || history.current.todayStart !== todayStart || history.current.key !== key) {
-        const d = new Date(todayStart);
-        const from = new Date(d.getFullYear(), d.getMonth(), d.getDate() - (HISTORY_DAYS - 1)).getTime();
-        const past = await UsageStats.getUsageEvents(from, todayStart, pkgs);
+        const past = await UsageStats.getUsageEvents(dayStartOffset(todayStart, -(HISTORY_DAYS - 1)), todayStart, pkgs);
         history.current = { todayStart, key, events: past.events, historyStartMs: past.historyStartMs };
       }
       const today = await UsageStats.getUsageEvents(todayStart, now, pkgs);
-      setData(buildSnapshot([...history.current.events, ...today.events], history.current.historyStartMs, pkgs, now, appLabel));
+      const next = buildSnapshot([...history.current.events, ...today.events], history.current.historyStartMs, pkgs, now, appLabel);
+      // Keep the old object when nothing changed so screens don't re-render on every poll.
+      setData((prev) => (JSON.stringify(prev) === JSON.stringify(next) ? prev : next));
       setError(false);
     } catch {
       setError(true);
-    } finally {
-      setLoading(false);
     }
   }, [key]);
 
@@ -84,7 +80,8 @@ export function UsageProvider({ children }: { children: ReactNode }) {
     };
   }, [refresh]);
 
-  return <UsageContext.Provider value={{ ...data, loading, error, refresh }}>{children}</UsageContext.Provider>;
+  const value = useMemo(() => ({ ...data, error }), [data, error]);
+  return <UsageContext.Provider value={value}>{children}</UsageContext.Provider>;
 }
 
 export function useUsageSnapshot(): UsageSnapshot {

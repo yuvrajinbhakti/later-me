@@ -35,10 +35,8 @@ export function usePermissions() {
 
   return {
     ...perms,
-    refresh,
     requestNotifications,
     openUsageSettings: UsageStats.openUsageAccessSettings,
     openOverlaySettings: UsageStats.openOverlaySettings,
-    openNotificationSettings: UsageStats.openNotificationSettings,
   };
 }

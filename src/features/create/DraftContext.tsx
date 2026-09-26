@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
-import { toLocalYmd } from '../../domain/format';
+import { monthsFromNow } from '../../domain/format';
 import type { QuestDraft } from '../../domain/types';
 
 export type DraftMilestone = QuestDraft['milestones'][number];
@@ -15,11 +15,10 @@ const DraftContext = createContext<DraftStore | null>(null);
 export const blankMilestone = (): DraftMilestone => ({ title: '', tasks: [{ title: '', minutes: null }] });
 
 function freshDraft(): QuestDraft {
-  const now = new Date();
   return {
     title: '',
     why: '',
-    targetDate: toLocalYmd(new Date(now.getFullYear(), now.getMonth() + 3, now.getDate())),
+    targetDate: monthsFromNow(new Date(), 3),
     hoursPerWeek: 5,
     milestones: [blankMilestone()],
   };

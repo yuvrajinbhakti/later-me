@@ -46,9 +46,7 @@ interface NativeUsageStats {
   openOverlaySettings(): void;
   canPostCallouts(): boolean;
   openNotificationSettings(): void;
-  getUsageToday(packages: string[]): Promise<Record<string, number>>;
   getUsageEvents(beginMs: number, endMs: number, packages: string[]): Promise<UsageEventsResult>;
-  getForegroundApp(): Promise<string | null>;
   startWatcher(configJson: string, roastsJson: string): boolean;
   stopWatcher(): void;
   isWatcherRunning(): boolean;
@@ -75,14 +73,8 @@ export const UsageStats = {
   canPostCallouts: (): boolean => (native ? native.canPostCallouts() : false),
   openNotificationSettings: (): void => (native ? native.openNotificationSettings() : notAndroid()),
 
-  /** Minutes of foreground time today, keyed by package name. */
-  getUsageToday: (packages: string[]): Promise<Record<string, number>> =>
-    native ? native.getUsageToday(packages) : Promise.resolve({}),
-
   getUsageEvents: (beginMs: number, endMs: number, packages: string[]): Promise<UsageEventsResult> =>
     native ? native.getUsageEvents(beginMs, endMs, packages) : Promise.resolve({ events: [], historyStartMs: null }),
-
-  getForegroundApp: (): Promise<string | null> => (native ? native.getForegroundApp() : Promise.resolve(null)),
 
   /** false when the platform refused to start the service. */
   startWatcher: (config: WatcherConfig, roasts: RoastPayload): boolean =>

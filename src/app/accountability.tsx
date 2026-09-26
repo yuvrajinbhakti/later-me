@@ -2,7 +2,7 @@ import { router } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { UsageStats } from '../../modules/usage-stats';
-import { formatMinutes } from '../domain/format';
+import { dayStartOffset, formatClock, formatMinutes } from '../domain/format';
 import { focusQuest } from '../domain/quests';
 import { previewLine } from '../domain/roasts';
 import {
@@ -41,21 +41,15 @@ const LEVELS: { label: string; hint: string; value: SarcasmLevel }[] = [
 ];
 
 const alertLabel = (m: AlertAfter) => (m < 1 ? '30 s' : `${m} min`);
-const limitShort = (m: DailyLimit) => (m === null ? 'None' : m < 60 ? `${m}m` : `${m / 60}h`);
-
-function pausedUntilLabel(ms: number): string {
-  const d = new Date(ms);
-  const h = d.getHours() % 12 === 0 ? 12 : d.getHours() % 12;
-  return `${h}:${String(d.getMinutes()).padStart(2, '0')} ${d.getHours() < 12 ? 'AM' : 'PM'}`;
-}
+const limitShort = (m: DailyLimit) => (m === null ? 'None' : formatMinutes(m));
 
 export default function AccountabilityScreen() {
   const { state, dispatch, lastSync, resync } = useAppStore();
   const perms = usePermissions();
   const s = state.settings;
   const [newPkg, setNewPkg] = useState('');
-  const [pausedUntil, setPausedUntil] = useState(UsageStats.getPausedUntil());
-  const [running, setRunning] = useState(UsageStats.isWatcherRunning());
+  const [pausedUntil, setPausedUntil] = useState(UsageStats.getPausedUntil);
+  const [running, setRunning] = useState(UsageStats.isWatcherRunning);
 
   const refreshStatus = useCallback(() => {
     setRunning(UsageStats.isWatcherRunning());
@@ -80,12 +74,7 @@ export default function AccountabilityScreen() {
 
   const paused = pausedUntil > Date.now();
   const togglePause = () => {
-    if (paused) UsageStats.setPausedUntil(0);
-    else {
-      const midnight = new Date();
-      midnight.setHours(24, 0, 0, 0);
-      UsageStats.setPausedUntil(midnight.getTime());
-    }
+    UsageStats.setPausedUntil(paused ? 0 : dayStartOffset(Date.now(), 1));
     refreshStatus();
   };
 
@@ -96,6 +85,7 @@ export default function AccountabilityScreen() {
     accessibilityLabel: m === null ? 'No daily limit' : `${formatMinutes(m)} daily limit`,
   }));
   const customPkgs = s.trackedPackages.filter((p) => !KNOWN_APPS[p]);
+  const preview = previewLine(s.sarcasmLevel, focusQuest(state), new Date());
 
   return (
     <Screen header={<TopBar onBack={() => router.back()} title="Accountability" />}>
@@ -138,7 +128,7 @@ export default function AccountabilityScreen() {
         <Text variant="meta" style={styles.hint}>Continuous time in a tracked app before the first callout.</Text>
       </Section>
 
-      <Section title="Daily limit" right={<Text variant="cap" num color={colors.text}>{s.dailyLimitMinutes === null ? 'None' : formatMinutes(s.dailyLimitMinutes)}</Text>}>
+      <Section title="Daily limit" right={<Text variant="cap" num color={colors.text}>{limitShort(s.dailyLimitMinutes)}</Text>}>
         <Segmented options={limitOptions} value={s.dailyLimitMinutes} onChange={(dailyLimitMinutes) => update({ dailyLimitMinutes })} />
         <Text variant="meta" style={styles.hint}>Crossing it gets one callout that day, however it was spread out.</Text>
       </Section>
@@ -189,18 +179,18 @@ export default function AccountabilityScreen() {
       </Section>
 
       <Section title="Preview">
-        <View style={styles.push} accessible accessibilityLabel={`Preview callout: ${previewLine(s.sarcasmLevel, focusQuest(state), new Date())}`}>
+        <View style={styles.push} accessible accessibilityLabel={`Preview callout: ${preview}`}>
           <View style={styles.pushHead}>
             <View style={styles.pushIcon}><Icon name="flag" size={12} color={colors.onAccent} /></View>
             <Text variant="meta">Later Me · now</Text>
           </View>
           <Text style={styles.pushTitle}>Still here?</Text>
-          <Text style={styles.pushText}>{previewLine(s.sarcasmLevel, focusQuest(state), new Date())}</Text>
+          <Text style={styles.pushText}>{preview}</Text>
         </View>
       </Section>
 
       <Section title="Not today">
-        {paused ? <Text variant="cap" style={styles.pausedText}>Callouts are paused until {pausedUntilLabel(pausedUntil)}.</Text> : null}
+        {paused ? <Text variant="cap" style={styles.pausedText}>Callouts are paused until {formatClock(new Date(pausedUntil))}.</Text> : null}
         <Button kind="secondary" label={paused ? 'Resume callouts' : 'Pause until midnight'} onPress={togglePause} />
       </Section>
     </Screen>

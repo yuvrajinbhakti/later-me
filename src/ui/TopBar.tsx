@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Icon } from './Icon';
+import { Icon, type IconName } from './Icon';
 import { Text } from './Text';
 import { colors, pad, radius } from './theme';
 
@@ -37,7 +37,7 @@ export function IconButton({
   onPress,
   bordered,
 }: {
-  icon: 'back' | 'settings' | 'more' | 'x' | 'plus' | 'bell';
+  icon: IconName;
   label: string;
   onPress: () => void;
   bordered?: boolean;

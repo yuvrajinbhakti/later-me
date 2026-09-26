@@ -1,16 +1,9 @@
+import type { RoastPayload } from '../../modules/usage-stats';
 import { daysBetween, formatDate, formatMinutes, parseLocalDate } from './format';
 import { nextTask } from './quests';
 import type { AppUsage, Quest, SarcasmLevel } from './types';
 
-/**
- * tiers[0..2] escalate within one session; limit fires once when the daily limit is crossed.
- * Placeholders {sessionMinutes}, {todayMinutes} and {daysLeft} are filled by the native watcher
- * when a callout fires, so nothing here can go stale while the app is closed.
- */
-export interface RoastPools {
-  tiers: string[][];
-  limit: string[];
-}
+export type RoastPools = RoastPayload;
 
 /** Callouts describe behaviour, never character. */
 export const BANNED_PHRASES = [

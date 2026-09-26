@@ -44,17 +44,10 @@ class UsageStatsModule : Module() {
 
     // ---- Usage queries ----
 
-    AsyncFunction("getUsageToday") { packages: List<String> ->
-      val now = System.currentTimeMillis()
-      packages.associateWith { pkg -> UsageQueries.trackedTodayMs(context, setOf(pkg), now).toDouble() / 60_000.0 }
-    }
-
     AsyncFunction("getUsageEvents") { beginMs: Double, endMs: Double, packages: List<String> ->
       val (events, historyStart) = UsageQueries.eventsForJs(context, beginMs.toLong(), endMs.toLong(), packages.toSet())
       mapOf("events" to events, "historyStartMs" to historyStart?.toDouble())
     }
-
-    AsyncFunction("getForegroundApp") { UsageQueries.foregroundApp(context) }
 
     // ---- Watcher service ----
 
@@ -63,13 +56,7 @@ class UsageStatsModule : Module() {
       Prefs.setConfig(context, configJson)
       Prefs.setRoasts(context, roastsJson)
       Prefs.setAlertsEnabled(context, true)
-      val intent = Intent(context, WatcherService::class.java)
-      try {
-        if (Build.VERSION.SDK_INT >= 26) context.startForegroundService(intent) else context.startService(intent)
-        true
-      } catch (e: Exception) {
-        false
-      }
+      WatcherService.start(context)
     }
 
     Function("stopWatcher") {
