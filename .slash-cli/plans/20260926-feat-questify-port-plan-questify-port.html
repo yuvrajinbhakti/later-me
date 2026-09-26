@@ -1,0 +1,722 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Questify core-loop port — implementation plan</title>
+<style>
+  :root { --bg:#fff; --fg:#16181d; --muted:#5d6472; --line:#e3e6ec; --code:#f5f6f8; --accent:#6557e8; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.6 -apple-system, "Segoe UI", system-ui, sans-serif; }
+  main { max-width:800px; margin:0 auto; padding:40px 20px 80px; }
+  h1 { font-size:28px; margin:0 0 4px; }
+  .lede { color:var(--muted); margin:0 0 28px; }
+  h2 { font-size:20px; margin:40px 0 10px; padding-top:12px; border-top:1px solid var(--line); }
+  h3 { font-size:16px; margin:28px 0 8px; }
+  .task { border:1px solid var(--line); border-radius:10px; padding:4px 18px 14px; margin:18px 0; }
+  .task h3 { color:var(--accent); }
+  code { background:var(--code); padding:1px 5px; border-radius:4px; font-size:13px; }
+  pre { background:var(--code); padding:12px 14px; border-radius:8px; overflow-x:auto; font-size:12.5px; line-height:1.5; }
+  pre code { background:none; padding:0; }
+  table { border-collapse:collapse; width:100%; font-size:14px; margin:10px 0; }
+  th, td { border:1px solid var(--line); padding:6px 9px; text-align:left; vertical-align:top; }
+  th { background:var(--code); }
+  ul { padding-left:22px; }
+  .note { color:var(--muted); font-size:14px; }
+</style>
+</head>
+<body>
+<main>
+<h1>Questify core-loop port — implementation plan</h1>
+<p class="lede">Rebuild Later Me's UI as Questify's core loop on real on-device data, and extend the native watcher to match. Spec: <code>.slash-cli/specs/2026-09-26-questify-port-design.md</code>.</p>
+
+<blockquote><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: use <code>subagent-driven-development</code> or <code>executing-plans</code> to implement task by task. Each task's implementation goes through <code>test-driven-development</code>. Steps use checkbox syntax.</blockquote>
+
+<p><strong>Goal:</strong> Later Me looks and behaves like Questify's core loop (13 screens, 3 tabs) with every number real and persisted, and the watcher honours sarcasm level, alert-after and daily limit.</p>
+<p><strong>Architecture:</strong> Pure TypeScript domain modules (quests, ETA, roasts, usage aggregation, migration) carry all logic and are unit-tested with Jest. A small React context store persists <code>AppState</code> to AsyncStorage and pushes a derived config plus roast pools to the native module. Expo Router renders thin screens over a Questify design layer. The Kotlin module gains a pure <code>TriggerPolicy</code> (JUnit-tested), a raw usage-events query, notification delivery and a restyled overlay.</p>
+<p><strong>Tech stack:</strong> Expo SDK 57, React Native 0.86, Expo Router, react-native-svg, @expo-google-fonts/inter, @react-native-community/datetimepicker, AsyncStorage 2.2, Jest via jest-expo, Kotlin + JUnit 4 for the module.</p>
+
+<h2>Global constraints</h2>
+<ul>
+  <li>App name stays <strong>Later Me</strong>, package <code>com.yuvraj.laterme</code>. Questify is the design source only.</li>
+  <li>Dark theme only. Questify dark tokens verbatim: bg <code>#0B0D12</code>, surface <code>#131720</code>, elevated <code>#1A1F2B</code>, border <code>#292F3D</code>, text <code>#F5F7FA</code>, text-2 <code>#9AA3B2</code>, muted <code>#656D7B</code>, accent <code>#8B7CFF</code>, mint <code>#5EE7B7</code>, warning <code>#FFCC66</code>, danger <code>#FF6B81</code>, sarcasm <code>#FF7A59</code>.</li>
+  <li>Violet marks only current position and next action; orange only where the user's own usage earned it; at most two accents per screen.</li>
+  <li>Tabs: <strong>Home · Quests · Attention</strong>.</li>
+  <li>Sarcasm level: gentle = notification; normal = overlay; savage = overlay, harsher copy, faster escalation.</li>
+  <li>Alert after: <strong>5 / 10 / 15 / 30 min</strong> (dev builds add a 30-second option for testing). Daily limit: <strong>1h / 2h / 3h / none</strong>.</li>
+  <li>Escalation wait (fixed): <strong>2 min</strong> gentle and normal, <strong>1 min</strong> savage.</li>
+  <li>Daily limit fires one callout per day, delivered per the current level.</li>
+  <li>Roast copy describes behaviour, never character. Banned: lazy, pathetic, loser, decoration, wasted potential, useless, failure, shame.</li>
+  <li>When the focus quest is paused / completed / deleted, the most recently created remaining active quest becomes focus; else none.</li>
+  <li>Commits: plain messages, <strong>no co-author or generated-by trailers</strong>. Commit, never push.</li>
+  <li>Before writing Expo code, consult the SDK 57 docs (repo <code>AGENTS.md</code> rule).</li>
+</ul>
+
+<h2>File structure</h2>
+<table>
+<tr><th>Path</th><th>Responsibility</th></tr>
+<tr><td><code>src/domain/types.ts</code></td><td>Quest, Milestone, Task, AppState, QuestDraft, AccountabilitySettings, option constants</td></tr>
+<tr><td><code>src/domain/quests.ts</code></td><td>Pure quest and AppState operations, focus rules, draft validation</td></tr>
+<tr><td><code>src/domain/eta.ts</code></td><td>Projection, slip, cost of minutes</td></tr>
+<tr><td><code>src/domain/format.ts</code></td><td>Minute / percent / date formatting</td></tr>
+<tr><td><code>src/domain/roasts.ts</code></td><td>Roast pools by level × tier, preview line, observation line, banned phrases</td></tr>
+<tr><td><code>src/domain/usage.ts</code></td><td>Raw usage events → intervals, opens, per-app, hourly, daily</td></tr>
+<tr><td><code>src/domain/migration.ts</code></td><td>Legacy goal/settings → AppState; AppState parsing</td></tr>
+<tr><td><code>src/store/persist.ts</code></td><td>AsyncStorage load/save with migration and corrupt-data backup</td></tr>
+<tr><td><code>src/store/AppStore.tsx</code></td><td>Context + reducer + persistence + watcher sync effect</td></tr>
+<tr><td><code>src/watcher/config.ts</code></td><td>AppState → native WatcherConfig; <code>syncWatcher</code></td></tr>
+<tr><td><code>src/ui/*</code></td><td>Theme tokens, fonts, Icon, primitives (Text, Button, Card, Chip, ProgressBar, Spine, Segmented, RadioGroup, Toggle, TaskRow, TopBar, Screen, TabBar)</td></tr>
+<tr><td><code>src/features/attention/useUsageSnapshot.ts</code>, <code>src/features/permissions/usePermissions.ts</code></td><td>Hooks bridging native queries into screens</td></tr>
+<tr><td><code>src/app/**</code></td><td>Expo Router routes (thin screens)</td></tr>
+<tr><td><code>modules/usage-stats/android/.../TriggerPolicy.kt</code></td><td>Pure trigger + delivery decisions</td></tr>
+<tr><td><code>modules/usage-stats/android/.../WatcherService.kt</code>, <code>Prefs.kt</code>, <code>UsageStatsModule.kt</code>, <code>index.ts</code></td><td>Service loop, config fields, usage-events query, notification delivery, restyled overlay</td></tr>
+</table>
+<p class="note">Removed: <code>App.tsx</code>, <code>index.ts</code>, <code>src/screens/*</code>, <code>src/components.tsx</code>, <code>src/theme.ts</code>, <code>src/types.ts</code>, <code>src/storage.ts</code>, <code>src/eta.ts</code>, <code>src/roasts.ts</code> (superseded).</p>
+
+<h2>Tasks</h2>
+
+<div class="task">
+<h3>Task 1: Test harness, domain types and quest operations</h3>
+<p><strong>Files:</strong> create <code>src/domain/types.ts</code>, <code>src/domain/quests.ts</code>, <code>src/domain/__tests__/quests.test.ts</code>; modify <code>package.json</code> (jest config + <code>test</code> script), <code>tsconfig.json</code> (<code>@/*</code> → <code>./src/*</code>).</p>
+<p><strong>Produces:</strong></p>
+<pre><code>type QuestStatus = 'active' | 'paused' | 'completed';
+type SarcasmLevel = 'gentle' | 'normal' | 'savage';
+type AlertAfter = 0.5 | 5 | 10 | 15 | 30;          // 0.5 only offered in __DEV__
+type DailyLimit = 1 | 60 | 120 | 180 | null;     // 1 only offered in __DEV__
+interface AppUsage { pkg: string; label: string; minutes: number; opens: number }
+interface Task { id: string; title: string; minutes: number | null; done: boolean; doneAt: string | null }
+interface Milestone { id: string; title: string; tasks: Task[] }
+interface Quest { id: string; title: string; why: string; targetDate: string /* YYYY-MM-DD */;
+  hoursPerWeek: number; status: QuestStatus; createdAt: string; completedAt: string | null; milestones: Milestone[] }
+interface AccountabilitySettings { alertsEnabled: boolean; sarcasmLevel: SarcasmLevel;
+  alertAfterMinutes: AlertAfter; dailyLimitMinutes: DailyLimit; trackedPackages: string[] }
+interface AppState { version: 2; quests: Quest[]; focusQuestId: string | null; settings: AccountabilitySettings }
+interface QuestDraft { title: string; why: string; targetDate: string; hoursPerWeek: number;
+  milestones: { title: string; tasks: { title: string; minutes: number | null }[] }[] }
+const ALERT_AFTER_OPTIONS: AlertAfter[] = [5, 10, 15, 30];
+const DAILY_LIMIT_OPTIONS: DailyLimit[] = [60, 120, 180, null];
+const DEFAULT_SETTINGS: AccountabilitySettings  // alerts on, normal, 10 min, 2h, ['com.instagram.android']
+
+// quests.ts
+emptyState(): AppState
+createQuest(draft: QuestDraft, now: Date, makeId: () =&gt; string): Quest
+validateDraft(draft: QuestDraft): string | null
+questProgress(q: Quest): number                 // 0..1
+milestoneProgress(m: Milestone): number
+currentMilestone(q: Quest): Milestone | null
+milestoneState(q: Quest, m: Milestone): 'done' | 'current' | 'upcoming'
+todayTasks(q: Quest, limit?: number): Task[]    // default 3
+nextTask(q: Quest): Task | null
+toggleTask(q: Quest, taskId: string, now: Date): Quest
+focusQuest(s: AppState): Quest | null
+addQuest(s: AppState, q: Quest): AppState
+setFocus(s: AppState, id: string): AppState
+setQuestStatus(s: AppState, id: string, status: QuestStatus, now: Date): AppState
+deleteQuest(s: AppState, id: string): AppState
+makeId(): string                                 // random, for app use</code></pre>
+<ul>
+<li>[ ] <strong>Step 1:</strong> <code>npx expo install jest-expo jest @types/jest -- --dev</code>; add <code>"test": "jest"</code> and:
+<pre><code>"jest": {
+  "preset": "jest-expo",
+  "transformIgnorePatterns": [
+    "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@sentry/react-native|native-base|react-native-svg)"
+  ]
+}</code></pre></li>
+<li>[ ] <strong>Step 2: failing tests</strong> — <code>src/domain/__tests__/quests.test.ts</code>:</li>
+</ul>
+<pre><code>import { addQuest, createQuest, currentMilestone, deleteQuest, emptyState, focusQuest, milestoneState,
+  nextTask, questProgress, setFocus, setQuestStatus, todayTasks, toggleTask, validateDraft } from '../quests';
+import type { QuestDraft } from '../types';
+
+const NOW = new Date(2026, 8, 26, 12, 0);
+let n = 0;
+const makeId = () =&gt; `id${++n}`;
+beforeEach(() =&gt; { n = 0; });
+
+const draft: QuestDraft = {
+  title: 'Become a better frontend engineer', why: 'Defend my calls', targetDate: '2026-12-15', hoursPerWeek: 8,
+  milestones: [
+    { title: 'Foundations', tasks: [{ title: 'Caching', minutes: 45 }, { title: 'Queues', minutes: null }] },
+    { title: 'System design', tasks: [{ title: 'Sharding', minutes: 45 }] },
+  ],
+};
+const tick = (q, mi, ti) =&gt; toggleTask(q, q.milestones[mi].tasks[ti].id, NOW);
+
+describe('createQuest', () =&gt; {
+  it('builds an active quest with undone tasks', () =&gt; {
+    const q = createQuest(draft, NOW, makeId);
+    expect(q.status).toBe('active');
+    expect(q.milestones.map(m =&gt; m.title)).toEqual(['Foundations', 'System design']);
+    expect(q.milestones[0].tasks.every(t =&gt; !t.done &amp;&amp; t.doneAt === null)).toBe(true);
+    expect(q.createdAt).toBe(NOW.toISOString());
+  });
+  it('trims and drops blank milestones and tasks', () =&gt; {
+    const q = createQuest({ ...draft, milestones: [
+      { title: '  ', tasks: [] },
+      { title: ' Real ', tasks: [{ title: ' ', minutes: null }, { title: 'Do it', minutes: 10 }] },
+    ] }, NOW, makeId);
+    expect(q.milestones.map(m =&gt; m.title)).toEqual(['Real']);
+    expect(q.milestones[0].tasks.map(t =&gt; t.title)).toEqual(['Do it']);
+  });
+});
+
+describe('validateDraft', () =&gt; {
+  it('requires a title', () =&gt; expect(validateDraft({ ...draft, title: ' ' })).toBe('Name the goal first.'));
+  it('requires a valid target date', () =&gt; expect(validateDraft({ ...draft, targetDate: 'nope' })).toBe('Pick a target date.'));
+  it('requires a milestone with a task', () =&gt;
+    expect(validateDraft({ ...draft, milestones: [{ title: 'A', tasks: [] }] })).toBe('Add at least one milestone with one task.'));
+  it('accepts a complete draft', () =&gt; expect(validateDraft(draft)).toBeNull());
+});
+
+describe('progress and position', () =&gt; {
+  it('progress is ticked over total tasks', () =&gt; {
+    expect(questProgress(tick(createQuest(draft, NOW, makeId), 0, 0))).toBeCloseTo(1 / 3);
+  });
+  it('progress is zero with no tasks', () =&gt; {
+    expect(questProgress({ ...createQuest(draft, NOW, makeId), milestones: [] })).toBe(0);
+  });
+  it('current milestone advances when its last task is ticked', () =&gt; {
+    let q = createQuest(draft, NOW, makeId);
+    expect(currentMilestone(q)?.title).toBe('Foundations');
+    q = tick(tick(q, 0, 0), 0, 1);
+    expect(currentMilestone(q)?.title).toBe('System design');
+    expect(milestoneState(q, q.milestones[0])).toBe('done');
+    expect(milestoneState(q, q.milestones[1])).toBe('current');
+  });
+  it('today shows up to three undone tasks of the current milestone', () =&gt; {
+    expect(todayTasks(createQuest(draft, NOW, makeId)).map(t =&gt; t.title)).toEqual(['Caching', 'Queues']);
+  });
+  it('ticking twice un-ticks and clears doneAt', () =&gt; {
+    const q = tick(tick(createQuest(draft, NOW, makeId), 0, 0), 0, 0);
+    expect(q.milestones[0].tasks[0]).toMatchObject({ done: false, doneAt: null });
+  });
+  it('next task and current milestone are null when everything is done', () =&gt; {
+    const q = tick(tick(tick(createQuest(draft, NOW, makeId), 0, 0), 0, 1), 1, 0);
+    expect(nextTask(q)).toBeNull();
+    expect(currentMilestone(q)).toBeNull();
+  });
+});
+
+describe('focus rules', () =&gt; {
+  const three = () =&gt; [new Date(2026, 0, 1), new Date(2026, 1, 1), new Date(2026, 2, 1)]
+    .map(d =&gt; createQuest(draft, d, makeId));
+  it('the first quest becomes focus and later ones do not steal it', () =&gt; {
+    const [a, b] = three();
+    const s = [a, b].reduce(addQuest, emptyState());
+    expect(s.focusQuestId).toBe(a.id);
+    expect(focusQuest(s)?.id).toBe(a.id);
+  });
+  it('pausing focus hands it to the most recently created active quest', () =&gt; {
+    const [a, b, c] = three();
+    const s = setQuestStatus([a, b, c].reduce(addQuest, emptyState()), a.id, 'paused', NOW);
+    expect(s.focusQuestId).toBe(c.id);
+  });
+  it('completing the only quest leaves no focus and stamps completedAt', () =&gt; {
+    const [a] = three();
+    const s = setQuestStatus(addQuest(emptyState(), a), a.id, 'completed', NOW);
+    expect(s.focusQuestId).toBeNull();
+    expect(s.quests[0].completedAt).toBe(NOW.toISOString());
+  });
+  it('deleting removes the quest and reassigns focus', () =&gt; {
+    const [a, b] = three();
+    const s = deleteQuest([a, b].reduce(addQuest, emptyState()), a.id);
+    expect(s.quests.map(q =&gt; q.id)).toEqual([b.id]);
+    expect(s.focusQuestId).toBe(b.id);
+  });
+  it('resuming a quest when nothing is in focus makes it focus', () =&gt; {
+    const [a] = three();
+    let s = setQuestStatus(addQuest(emptyState(), a), a.id, 'paused', NOW);
+    s = setQuestStatus(s, a.id, 'active', NOW);
+    expect(s.focusQuestId).toBe(a.id);
+  });
+  it('setFocus ignores quests that are not active', () =&gt; {
+    const [a, b] = three();
+    let s = setQuestStatus([a, b].reduce(addQuest, emptyState()), b.id, 'paused', NOW);
+    s = setFocus(s, b.id);
+    expect(s.focusQuestId).toBe(a.id);
+  });
+});</code></pre>
+<ul>
+<li>[ ] <strong>Step 3:</strong> <code>npx jest src/domain</code> → FAIL (module not found).</li>
+<li>[ ] <strong>Step 4:</strong> implement <code>types.ts</code> and <code>quests.ts</code> as pure functions returning new objects. Focus fallback: among <code>status === 'active'</code> quests other than the removed one, pick max <code>createdAt</code>.</li>
+<li>[ ] <strong>Step 5:</strong> <code>npx jest src/domain</code> → PASS; <code>npx tsc --noEmit</code> clean.</li>
+<li>[ ] <strong>Step 6:</strong> commit <code>Add quest domain model and test harness</code>.</li>
+</ul>
+</div>
+
+<div class="task">
+<h3>Task 2: ETA, cost and formatting</h3>
+<p><strong>Files:</strong> create <code>src/domain/eta.ts</code>, <code>src/domain/format.ts</code>, <code>src/domain/__tests__/eta.test.ts</code>, <code>src/domain/__tests__/format.test.ts</code>.</p>
+<p><strong>Consumes:</strong> <code>Quest</code>, <code>nextTask</code>, <code>createQuest</code>, <code>toggleTask</code>. <strong>Produces:</strong></p>
+<pre><code>interface Projection { doneTasks: number; totalTasks: number; daysToTarget: number;
+  projectedDate: Date | null; slipDays: number }
+projectQuest(q: Quest, now: Date): Projection
+costOfMinutes(minutes: number, q: Quest): { taskEquivalents: number | null; taskTitle: string | null; days: number }
+formatMinutes(m: number): string        // 81 → '1h 21m', 60 → '1h', 26 → '26m', 0.4 → '0m'
+formatPercent(fraction: number): string  // 0.425 → '43'
+formatDate(d: Date | null): string       // 'Dec 15, 2026' | 'never at this pace'
+parseLocalDate(ymd: string): Date        // '2026-12-15' → local midnight</code></pre>
+<ul><li>[ ] <strong>Step 1: failing tests</strong></li></ul>
+<pre><code>// eta.test.ts
+import { costOfMinutes, projectQuest } from '../eta';
+import { createQuest, toggleTask } from '../quests';
+const makeId = (() =&gt; { let n = 0; return () =&gt; `id${++n}`; })();
+const CREATED = new Date(2026, 8, 16, 12, 0);
+const NOW = new Date(2026, 8, 26, 12, 0);             // 10 days later
+const q0 = createQuest({ title: 'Q', why: '', targetDate: '2026-10-06', hoursPerWeek: 7, milestones: [
+  { title: 'M', tasks: [1, 2, 3, 4, 5, 6].map(i =&gt; ({ title: `T${i}`, minutes: i === 3 ? 45 : null })) },
+] }, CREATED, makeId);
+const done = (q, k) =&gt; q.milestones[0].tasks.slice(0, k).reduce((acc, t) =&gt; toggleTask(acc, t.id, NOW), q);
+
+it('extrapolates the ticking pace since creation', () =&gt; {
+  const p = projectQuest(done(q0, 2), NOW);        // 0.2 tasks/day, 4 left → 20 days
+  expect(p.projectedDate?.toDateString()).toBe(new Date(2026, 9, 16, 12, 0).toDateString());
+  expect(p.daysToTarget).toBe(10);
+  expect(p.slipDays).toBe(10);
+});
+it('projects never when nothing is done', () =&gt; expect(projectQuest(q0, NOW).projectedDate).toBeNull());
+it('projects today with no slip when everything is done', () =&gt; {
+  const p = projectQuest(done(q0, 6), NOW);
+  expect(p.projectedDate?.toDateString()).toBe(NOW.toDateString());
+  expect(p.slipDays).toBe(0);
+});
+it('prices minutes in the next task estimate', () =&gt; {
+  expect(costOfMinutes(81, done(q0, 2))).toEqual({ taskEquivalents: 1.8, taskTitle: 'T3', days: 1.35 });
+});
+it('has no task equivalent when the next task has no estimate', () =&gt; {
+  expect(costOfMinutes(30, q0).taskEquivalents).toBeNull();   // T1 has no estimate
+});
+
+// format.test.ts
+import { formatDate, formatMinutes, formatPercent, parseLocalDate } from '../format';
+it.each([[81, '1h 21m'], [60, '1h'], [26, '26m'], [0.4, '0m'], [0, '0m']])('formatMinutes(%p)', (m, s) =&gt;
+  expect(formatMinutes(m)).toBe(s));
+it('formatPercent rounds', () =&gt; expect(formatPercent(0.425)).toBe('43'));
+it('formatDate handles never', () =&gt; expect(formatDate(null)).toBe('never at this pace'));
+it('parseLocalDate is local midnight', () =&gt; expect(parseLocalDate('2026-12-15').getHours()).toBe(0));</code></pre>
+<ul>
+<li>[ ] <strong>Step 2:</strong> run → FAIL. <strong>Step 3:</strong> implement. Days-to-target and slip use <code>Math.round(Δms / 86 400 000)</code>; elapsed days floor at 0.5; <code>days = minutes / (hoursPerWeek·60/7)</code> rounded to 2 dp; <code>taskEquivalents</code> rounded to 1 dp.</li>
+<li>[ ] <strong>Step 4:</strong> run → PASS. <strong>Step 5:</strong> commit <code>Add quest projection and formatting</code>.</li>
+</ul>
+</div>
+
+<div class="task">
+<h3>Task 3: Roast pools by sarcasm level and tone rule</h3>
+<p><strong>Files:</strong> create <code>src/domain/roasts.ts</code>, <code>src/domain/__tests__/roasts.test.ts</code>.</p>
+<p><strong>Consumes:</strong> <code>projectQuest</code>, <code>nextTask</code>, <code>formatDate</code>, <code>formatMinutes</code>. <strong>Produces:</strong></p>
+<pre><code>type RoastTiers = string[][];            // [tier0, tier1, tier2]; placeholders {sessionMinutes}, {todayMinutes}
+BANNED_PHRASES: string[]
+buildRoastTiers(level: SarcasmLevel, quest: Quest | null, now: Date): RoastTiers
+previewLine(level: SarcasmLevel, quest: Quest | null, now: Date): string      // tier-0 line, sample 17 / 42 filled
+observationLine(apps: AppUsage[]): string | null   // AppUsage from types.ts</code></pre>
+<ul><li>[ ] <strong>Step 1: failing tests</strong></li></ul>
+<pre><code>import { BANNED_PHRASES, buildRoastTiers, observationLine, previewLine } from '../roasts';
+import { createQuest } from '../quests';
+import type { SarcasmLevel } from '../types';
+const NOW = new Date(2026, 8, 26, 12, 0);
+const makeId = (() =&gt; { let n = 0; return () =&gt; `id${++n}`; })();
+const quest = createQuest({ title: 'Become a better frontend engineer', why: '', targetDate: '2026-12-15',
+  hoursPerWeek: 8, milestones: [{ title: 'System design', tasks: [{ title: 'Learn sharding', minutes: 45 }] }] },
+  new Date(2026, 8, 1), makeId);
+const LEVELS: SarcasmLevel[] = ['gentle', 'normal', 'savage'];
+const all = (level, q = quest) =&gt; buildRoastTiers(level, q, NOW).flat();
+
+it.each(LEVELS)('%s has three non-empty tiers', level =&gt; {
+  const tiers = buildRoastTiers(level, quest, NOW);
+  expect(tiers).toHaveLength(3);
+  tiers.forEach(t =&gt; expect(t.length).toBeGreaterThan(0));
+});
+it('names the focus quest and its next task', () =&gt; {
+  const text = all('normal').join('\n');
+  expect(text).toContain('Become a better frontend engineer');
+  expect(text).toContain('Learn sharding');
+});
+it('leaves only the native placeholders unfilled', () =&gt; {
+  const text = LEVELS.flatMap(l =&gt; all(l)).join('\n');
+  expect(text).toContain('{sessionMinutes}');
+  expect(text.match(/\{[a-zA-Z]+\}/g)?.every(p =&gt; p === '{sessionMinutes}' || p === '{todayMinutes}')).toBe(true);
+});
+it('falls back to usage-only copy without a quest', () =&gt; {
+  LEVELS.forEach(l =&gt; {
+    const lines = all(l, null);
+    expect(lines.length).toBeGreaterThanOrEqual(3);
+    lines.forEach(line =&gt; expect(line).not.toMatch(/undefined|null|NaN/));
+  });
+});
+it('savage copy is not the gentle copy', () =&gt; {
+  expect(all('savage').some(line =&gt; !all('gentle').includes(line))).toBe(true);
+});
+it('never describes character', () =&gt; {
+  const text = LEVELS.flatMap(l =&gt; [...all(l), ...all(l, null)]).join('\n').toLowerCase();
+  BANNED_PHRASES.forEach(p =&gt; expect(text).not.toContain(p));
+});
+it('preview fills sample numbers', () =&gt; LEVELS.forEach(l =&gt; expect(previewLine(l, quest, NOW)).not.toMatch(/\{/)));
+
+describe('observationLine', () =&gt; {
+  it('calls out the most-opened app at five or more opens', () =&gt;
+    expect(observationLine([{ pkg: 'ig', label: 'Instagram', minutes: 81, opens: 7 },
+      { pkg: 'yt', label: 'YouTube', minutes: 26, opens: 4 }])).toContain("You've opened Instagram 7 times"));
+  it('falls back to time when opens are low', () =&gt;
+    expect(observationLine([{ pkg: 'ig', label: 'Instagram', minutes: 40, opens: 2 }])).toContain('40m'));
+  it('is null with no usage', () =&gt;
+    expect(observationLine([{ pkg: 'ig', label: 'Instagram', minutes: 0, opens: 0 }])).toBeNull());
+});</code></pre>
+<ul>
+<li>[ ] <strong>Step 2:</strong> run → FAIL. <strong>Step 3:</strong> implement: a table <code>POOLS[level][tier]</code> of template functions over a context <code>{ title, task, taskMinutes, deadline, projected, daysLeft }</code>; no-quest pools separate. Port and rewrite existing <code>src/roasts.ts</code> lines under the tone rule; add Questify's lines (“Instagram is checking you”, “Just one more reel? That's what you said…”).</li>
+<li>[ ] <strong>Step 4:</strong> run → PASS. <strong>Step 5:</strong> commit <code>Add roast pools by sarcasm level</code>.</li>
+</ul>
+</div>
+
+<div class="task">
+<h3>Task 4: Usage aggregation from raw events</h3>
+<p><strong>Files:</strong> create <code>src/domain/usage.ts</code>, <code>src/domain/__tests__/usage.test.ts</code>.</p>
+<p><strong>Produces:</strong></p>
+<pre><code>interface RawUsageEvent { pkg: string; type: 'resumed' | 'paused'; ts: number }
+interface Interval { pkg: string; start: number; end: number }
+MERGE_GAP_MS = 5000
+toIntervals(events: RawUsageEvent[], now: number): Interval[]      // sorted by start
+opensByPackage(intervals: Interval[]): Record&lt;string, number&gt;
+minutesByPackage(intervals: Interval[], from: number, to: number): Record&lt;string, number&gt;
+hourlyMinutes(intervals: Interval[], dayStart: number): number[]    // length 24
+dailyMinutes(intervals: Interval[], days: number, todayStart: number): number[]  // oldest → today
+startOfLocalDay(ts: number): number</code></pre>
+<ul><li>[ ] <strong>Step 1: failing tests</strong></li></ul>
+<pre><code>import { dailyMinutes, hourlyMinutes, minutesByPackage, opensByPackage, startOfLocalDay, toIntervals } from '../usage';
+const t = (h: number, m = 0, s = 0, d = 26) =&gt; new Date(2026, 8, d, h, m, s).getTime();
+const r = (pkg: string, ts: number) =&gt; ({ pkg, type: 'resumed' as const, ts });
+const p = (pkg: string, ts: number) =&gt; ({ pkg, type: 'paused' as const, ts });
+
+it('pairs resume and pause into an interval', () =&gt;
+  expect(toIntervals([r('ig', t(10)), p('ig', t(10, 30))], t(12))).toEqual([{ pkg: 'ig', start: t(10), end: t(10, 30) }]));
+it('merges same-app hops shorter than five seconds', () =&gt;
+  expect(toIntervals([r('ig', t(10)), p('ig', t(10, 10)), r('ig', t(10, 10, 2)), p('ig', t(10, 20))], t(12)))
+    .toEqual([{ pkg: 'ig', start: t(10), end: t(10, 20) }]));
+it('keeps a five-second-or-longer gap as two sessions', () =&gt;
+  expect(toIntervals([r('ig', t(10)), p('ig', t(10, 10)), r('ig', t(10, 10, 5)), p('ig', t(10, 20))], t(12))).toHaveLength(2));
+it('closes a still-open session at now', () =&gt;
+  expect(toIntervals([r('ig', t(11))], t(11, 15))).toEqual([{ pkg: 'ig', start: t(11), end: t(11, 15) }]));
+it('ignores an orphan pause and a duplicate resume', () =&gt;
+  expect(toIntervals([p('ig', t(9)), r('ig', t(10)), r('ig', t(10, 5)), p('ig', t(10, 30))], t(12)))
+    .toEqual([{ pkg: 'ig', start: t(10), end: t(10, 30) }]));
+it('counts opens as sessions per app', () =&gt;
+  expect(opensByPackage(toIntervals([r('ig', t(8)), p('ig', t(8, 5)), r('yt', t(9)), p('yt', t(9, 1)),
+    r('ig', t(10)), p('ig', t(10, 5))], t(12)))).toEqual({ ig: 2, yt: 1 }));
+it('clips minutes to the window', () =&gt;
+  expect(minutesByPackage([{ pkg: 'ig', start: t(23, 30, 0, 25), end: t(0, 30) }], t(0), t(23, 59)))
+    .toEqual({ ig: 30 }));
+it('splits hourly minutes across hour boundaries', () =&gt; {
+  const h = hourlyMinutes([{ pkg: 'ig', start: t(10, 40), end: t(11, 25) }], t(0));
+  expect(h).toHaveLength(24);
+  expect(h[10]).toBeCloseTo(20);
+  expect(h[11]).toBeCloseTo(25);
+});
+it('returns daily minutes oldest to today', () =&gt; {
+  const d = dailyMinutes([{ pkg: 'ig', start: t(20, 0, 0, 25), end: t(20, 30, 0, 25) },
+    { pkg: 'ig', start: t(9), end: t(9, 15) }], 7, t(0));
+  expect(d).toHaveLength(7);
+  expect(d.slice(-2)).toEqual([30, 15]);
+});
+it('startOfLocalDay is local midnight', () =&gt; expect(startOfLocalDay(t(15, 12))).toBe(t(0)));</code></pre>
+<ul>
+<li>[ ] <strong>Step 2:</strong> run → FAIL. <strong>Step 3:</strong> implement: sort events by <code>ts</code>; per package keep an open start; on pause close it; on resume within <code>MERGE_GAP_MS</code> of that package's last close, reopen the previous interval instead of starting a new one. Day boundaries via <code>new Date(y, m, d)</code> so DST is handled by the platform.</li>
+<li>[ ] <strong>Step 4:</strong> run → PASS. <strong>Step 5:</strong> commit <code>Add usage aggregation</code>.</li>
+</ul>
+</div>
+
+<div class="task">
+<h3>Task 5: Migration, parsing and persistence</h3>
+<p><strong>Files:</strong> create <code>src/domain/migration.ts</code>, <code>src/store/persist.ts</code>, <code>src/domain/__tests__/migration.test.ts</code>, <code>src/store/__tests__/persist.test.ts</code>.</p>
+<p><strong>Consumes:</strong> <code>emptyState</code>, <code>addQuest</code>, <code>DEFAULT_SETTINGS</code>, <code>ALERT_AFTER_OPTIONS</code>. <strong>Produces:</strong></p>
+<pre><code>LEGACY_GOAL_KEY = 'later-me/goal'; LEGACY_SETTINGS_KEY = 'later-me/watcher-settings'; STATE_KEY = 'later-me/state/v2'
+migrateLegacy(goalJson: string | null, settingsJson: string | null, now: Date, makeId: () =&gt; string): AppState
+parseState(raw: string | null): { state: AppState | null; corrupt: boolean }
+loadAppState(now: Date, makeId: () =&gt; string): Promise&lt;AppState&gt;
+saveAppState(s: AppState): Promise&lt;void&gt;</code></pre>
+<ul><li>[ ] <strong>Step 1: failing tests</strong></li></ul>
+<pre><code>// migration.test.ts
+import { migrateLegacy, parseState } from '../migration';
+import { DEFAULT_SETTINGS } from '../types';
+const NOW = new Date(2026, 8, 26, 12, 0);
+const makeId = (() =&gt; { let n = 0; return () =&gt; `id${++n}`; })();
+const goal = (over = {}) =&gt; JSON.stringify({ aim: 'Backend engineer role by December',
+  targetDate: '2026-12-31T00:00:00.000Z', hoursPerWeek: 10, currentStep: 'DDIA chapter 7',
+  stepsTotal: 10, stepsDone: 0, createdAt: '2026-08-31T13:00:00.000Z', ...over });
+const settings = (thresholdSeconds: number) =&gt; JSON.stringify({
+  watchedPackages: ['com.instagram.android', 'com.android.chrome'], thresholdSeconds, cooldownSeconds: 20 });
+
+it('turns the old goal into the focus quest', () =&gt; {
+  const s = migrateLegacy(goal(), settings(30), NOW, makeId);
+  const q = s.quests[0];
+  expect(q).toMatchObject({ title: 'Backend engineer role by December', targetDate: '2026-12-31',
+    hoursPerWeek: 10, status: 'active', createdAt: '2026-08-31T13:00:00.000Z' });
+  expect(q.milestones[0].tasks[0].title).toBe('DDIA chapter 7');
+  expect(s.focusQuestId).toBe(q.id);
+});
+it('carries tracked apps and rounds the threshold', () =&gt; {
+  expect(migrateLegacy(goal(), settings(30), NOW, makeId).settings)
+    .toMatchObject({ trackedPackages: ['com.instagram.android', 'com.android.chrome'], alertAfterMinutes: 5 });
+  expect(migrateLegacy(null, settings(720), NOW, makeId).settings.alertAfterMinutes).toBe(10);
+  expect(migrateLegacy(null, settings(1500), NOW, makeId).settings.alertAfterMinutes).toBe(30);
+});
+it('uses a placeholder task when there was no current step', () =&gt;
+  expect(migrateLegacy(goal({ currentStep: '' }), null, NOW, makeId).quests[0].milestones[0].tasks[0].title)
+    .toBe('Decide your next step'));
+it('returns the default state when there is nothing legacy', () =&gt; {
+  const s = migrateLegacy(null, null, NOW, makeId);
+  expect(s).toEqual({ version: 2, quests: [], focusQuestId: null, settings: DEFAULT_SETTINGS });
+});
+it('ignores unparseable legacy JSON', () =&gt;
+  expect(migrateLegacy('{bad', '{bad', NOW, makeId).quests).toEqual([]));
+
+describe('parseState', () =&gt; {
+  it('round-trips a valid state', () =&gt; {
+    const s = migrateLegacy(goal(), settings(30), NOW, makeId);
+    expect(parseState(JSON.stringify(s))).toEqual({ state: s, corrupt: false });
+  });
+  it('flags malformed JSON', () =&gt; expect(parseState('{nope')).toEqual({ state: null, corrupt: true }));
+  it('flags a wrong shape', () =&gt; expect(parseState('{"version":1}')).toEqual({ state: null, corrupt: true }));
+  it('treats missing data as not corrupt', () =&gt; expect(parseState(null)).toEqual({ state: null, corrupt: false }));
+});
+
+// persist.test.ts
+jest.mock('@react-native-async-storage/async-storage', () =&gt;
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'));
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { LEGACY_GOAL_KEY, STATE_KEY } from '../../domain/migration';
+import { loadAppState, saveAppState } from '../persist';
+const NOW = new Date(2026, 8, 26, 12, 0);
+const makeId = (() =&gt; { let n = 0; return () =&gt; `id${++n}`; })();
+beforeEach(() =&gt; AsyncStorage.clear());
+
+it('migrates legacy data on first load and saves v2', async () =&gt; {
+  await AsyncStorage.setItem(LEGACY_GOAL_KEY, JSON.stringify({ aim: 'Ship', targetDate: '2026-12-31T00:00:00.000Z',
+    hoursPerWeek: 5, currentStep: 'Write spec', stepsTotal: 3, stepsDone: 0, createdAt: NOW.toISOString() }));
+  const s = await loadAppState(NOW, makeId);
+  expect(s.quests[0].title).toBe('Ship');
+  expect(await AsyncStorage.getItem(STATE_KEY)).not.toBeNull();
+});
+it('backs up corrupt v2 data and starts clean', async () =&gt; {
+  await AsyncStorage.setItem(STATE_KEY, '{broken');
+  const s = await loadAppState(NOW, makeId);
+  expect(s.quests).toEqual([]);
+  const keys = await AsyncStorage.getAllKeys();
+  const backup = keys.find(k =&gt; k.startsWith(`${STATE_KEY}.corrupt.`));
+  expect(backup).toBeDefined();
+  expect(await AsyncStorage.getItem(backup!)).toBe('{broken');
+});
+it('loads what was saved', async () =&gt; {
+  const s = await loadAppState(NOW, makeId);
+  await saveAppState({ ...s, focusQuestId: null, settings: { ...s.settings, sarcasmLevel: 'savage' } });
+  expect((await loadAppState(NOW, makeId)).settings.sarcasmLevel).toBe('savage');
+});</code></pre>
+<ul>
+<li>[ ] <strong>Step 2:</strong> run → FAIL. <strong>Step 3:</strong> implement. Nearest option by absolute difference over <code>ALERT_AFTER_OPTIONS</code> (production options, never 0.5). Migration runs only when <code>STATE_KEY</code> is absent; legacy keys are left in place. <code>parseState</code> checks <code>version === 2</code>, arrays and settings keys.</li>
+<li>[ ] <strong>Step 4:</strong> run → PASS. <strong>Step 5:</strong> commit <code>Add state persistence and legacy migration</code>.</li>
+</ul>
+</div>
+
+<div class="task">
+<h3>Task 6: Native module v2 — trigger policy, usage events, delivery, overlay</h3>
+<p><strong>Files:</strong> create <code>modules/usage-stats/android/src/main/java/expo/modules/usagestats/TriggerPolicy.kt</code>, <code>modules/usage-stats/android/src/test/java/expo/modules/usagestats/TriggerPolicyTest.kt</code>; modify <code>WatcherService.kt</code>, <code>Prefs.kt</code>, <code>UsageStatsModule.kt</code>, <code>modules/usage-stats/index.ts</code>, <code>modules/usage-stats/android/build.gradle</code> (<code>testImplementation 'junit:junit:4.13.2'</code>).</p>
+<p><strong>Produces (Kotlin):</strong></p>
+<pre><code>enum class TriggerKind { NONE, CONTINUOUS, DAILY_LIMIT }
+enum class Delivery { NOTIFICATION, OVERLAY }
+data class TriggerInput(val nowMs: Long, val inTrackedApp: Boolean, val continuousMs: Long, val thresholdMs: Long,
+  val cooldownUntilMs: Long, val overlayShowing: Boolean, val todayTrackedMs: Long, val dailyLimitMs: Long,
+  val dailyLimitFiredToday: Boolean, val pausedUntilMs: Long)
+object TriggerPolicy {
+  fun decide(i: TriggerInput): TriggerKind
+  fun delivery(level: String, canOverlay: Boolean): Delivery
+  fun tier(sessionTriggers: Int): Int          // min(sessionTriggers, 2)
+}</code></pre>
+<p><strong>Produces (JS, <code>modules/usage-stats/index.ts</code>):</strong></p>
+<pre><code>interface WatcherConfig { watchedPackages: string[]; thresholdSeconds: number; cooldownSeconds: number;
+  goalLabel: string; sarcasmLevel: 'gentle' | 'normal' | 'savage'; dailyLimitMinutes: number /* 0 = none */ }
+interface UsageEventRecord { pkg: string; type: 'resumed' | 'paused'; ts: number }  // same shape as RawUsageEvent; the module does not import app code
+UsageStats.getUsageEvents(beginMs: number, endMs: number, packages: string[]): Promise&lt;UsageEventRecord[]&gt;</code></pre>
+<ul><li>[ ] <strong>Step 1: failing JUnit tests</strong></li></ul>
+<pre><code>package expo.modules.usagestats
+import org.junit.Assert.assertEquals
+import org.junit.Test
+
+class TriggerPolicyTest {
+  private fun input(
+    inTrackedApp: Boolean = true, continuousMs: Long = 0, cooldownUntilMs: Long = 0, overlayShowing: Boolean = false,
+    todayTrackedMs: Long = 0, dailyLimitMs: Long = 0, dailyLimitFiredToday: Boolean = false, pausedUntilMs: Long = 0,
+  ) = TriggerInput(1_000_000, inTrackedApp, continuousMs, 300_000, cooldownUntilMs, overlayShowing,
+    todayTrackedMs, dailyLimitMs, dailyLimitFiredToday, pausedUntilMs)
+
+  @Test fun noneBelowThreshold() = assertEquals(TriggerKind.NONE, TriggerPolicy.decide(input(continuousMs = 299_999)))
+  @Test fun continuousAtThreshold() = assertEquals(TriggerKind.CONTINUOUS, TriggerPolicy.decide(input(continuousMs = 300_000)))
+  @Test fun noneDuringCooldown() =
+    assertEquals(TriggerKind.NONE, TriggerPolicy.decide(input(continuousMs = 900_000, cooldownUntilMs = 1_000_001)))
+  @Test fun noneWhileOverlayShowing() =
+    assertEquals(TriggerKind.NONE, TriggerPolicy.decide(input(continuousMs = 900_000, overlayShowing = true)))
+  @Test fun noneWhenPaused() =
+    assertEquals(TriggerKind.NONE, TriggerPolicy.decide(input(continuousMs = 900_000, pausedUntilMs = 2_000_000)))
+  @Test fun noneOutsideTrackedApp() =
+    assertEquals(TriggerKind.NONE, TriggerPolicy.decide(input(inTrackedApp = false, continuousMs = 900_000,
+      todayTrackedMs = 9_000_000, dailyLimitMs = 3_600_000)))
+  @Test fun dailyLimitFiresAndBeatsContinuous() =
+    assertEquals(TriggerKind.DAILY_LIMIT, TriggerPolicy.decide(input(continuousMs = 900_000,
+      todayTrackedMs = 3_600_000, dailyLimitMs = 3_600_000)))
+  @Test fun dailyLimitOnlyOncePerDay() =
+    assertEquals(TriggerKind.NONE, TriggerPolicy.decide(input(todayTrackedMs = 7_200_000, dailyLimitMs = 3_600_000,
+      dailyLimitFiredToday = true)))
+  @Test fun zeroDailyLimitMeansNone() =
+    assertEquals(TriggerKind.NONE, TriggerPolicy.decide(input(todayTrackedMs = 9_000_000, dailyLimitMs = 0)))
+  @Test fun gentleAlwaysNotifies() = assertEquals(Delivery.NOTIFICATION, TriggerPolicy.delivery("gentle", true))
+  @Test fun normalAndSavageUseOverlay() {
+    assertEquals(Delivery.OVERLAY, TriggerPolicy.delivery("normal", true))
+    assertEquals(Delivery.OVERLAY, TriggerPolicy.delivery("savage", true))
+  }
+  @Test fun overlayFallsBackWithoutPermission() = assertEquals(Delivery.NOTIFICATION, TriggerPolicy.delivery("savage", false))
+  @Test fun tierCapsAtTwo() {
+    assertEquals(0, TriggerPolicy.tier(0)); assertEquals(1, TriggerPolicy.tier(1)); assertEquals(2, TriggerPolicy.tier(5))
+  }
+}</code></pre>
+<ul>
+<li>[ ] <strong>Step 2:</strong> <code>cd android &amp;&amp; ./gradlew :usage-stats:testDebugUnitTest</code> → FAIL (unresolved <code>TriggerPolicy</code>).</li>
+<li>[ ] <strong>Step 3:</strong> implement <code>TriggerPolicy</code>. Order: paused → NONE; not in tracked app → NONE; overlay showing → NONE; cooldown → NONE; daily limit (&gt;0, reached, not fired today) → DAILY_LIMIT; continuous ≥ threshold → CONTINUOUS; else NONE.</li>
+<li>[ ] <strong>Step 4:</strong> run → PASS.</li>
+<li>[ ] <strong>Step 5: service wiring.</strong> <code>Prefs.getConfig</code> reads <code>sarcasmLevel</code> (default <code>"normal"</code>) and <code>dailyLimitMinutes</code> (default 0); add <code>dailyLimitFiredDay</code> (<code>yyyy-MM-dd</code>) get/set. <code>WatcherService.tick()</code> builds a <code>TriggerInput</code> (today's tracked ms computed only when in a tracked app and a limit is set and not yet fired) and acts on the decision. After any callout: <code>sessionTriggers++</code>, <code>cooldownUntil = now + cooldown</code>; overlay dismissal restarts the cooldown and <em>keeps</em> <code>continuousMs</code> so escalation fires after the wait if still scrolling. DAILY_LIMIT stamps today's day key. Fill <code>{sessionMinutes}</code> and <code>{todayMinutes}</code> at display time. Remove the debug <code>Log.d</code> tick line.</li>
+<li>[ ] <strong>Step 6: notification delivery.</strong> Channel <code>later_me_callouts</code> (IMPORTANCE_HIGH, created in <code>onCreate</code>); id <code>5100</code>; big-text style; tap opens the app; skipped silently if notifications are disabled.</li>
+<li>[ ] <strong>Step 7: overlay restyle.</strong> Background <code>#F20B0D12</code>; small label “Observation” in sarcasm orange; headline per tier (“Still here?”, “Again.”, “Okay. Intervention.”, daily limit: “Daily limit reached.”); roast in text <code>#F5F7FA</code>; “Focus quest · {goalLabel}” in muted <code>#9AA3B2</code>; primary “Fine, I'm out” button violet <code>#8B7CFF</code> with <code>#0B0D12</code> text and 12dp radius (<code>GradientDrawable</code>); dismiss link muted. No emoji.</li>
+<li>[ ] <strong>Step 8: events query.</strong> <code>AsyncFunction("getUsageEvents") { begin: Double, end: Double, packages: List&lt;String&gt; -&gt; }</code> returns <code>[{ pkg, type: "resumed"|"paused", ts }]</code> for RESUMED/PAUSED only, filtered to packages. Update <code>index.ts</code> types; keep non-Android fallbacks.</li>
+<li>[ ] <strong>Step 9:</strong> <code>./gradlew :usage-stats:testDebugUnitTest</code> PASS and <code>./gradlew :usage-stats:compileDebugKotlin</code> clean; <code>npx tsc --noEmit</code> clean.</li>
+<li>[ ] <strong>Step 10:</strong> commit <code>Extend watcher with sarcasm levels, daily limit and usage events</code>.</li>
+</ul>
+</div>
+
+<div class="task">
+<h3>Task 7: Watcher config and sync</h3>
+<p><strong>Files:</strong> create <code>src/watcher/config.ts</code>, <code>src/watcher/__tests__/config.test.ts</code>.</p>
+<p><strong>Consumes:</strong> <code>AppState</code>, <code>focusQuest</code>, <code>buildRoastTiers</code>, <code>UsageStats</code>. <strong>Produces:</strong></p>
+<pre><code>buildWatcherConfig(s: AppState): WatcherConfig
+syncWatcher(s: AppState, now: Date): void   // alerts off → stop if running; on + usage access → startWatcher(config, tiers)</code></pre>
+<ul><li>[ ] <strong>Step 1: failing tests</strong></li></ul>
+<pre><code>import { buildWatcherConfig } from '../config';
+import { addQuest, createQuest, emptyState } from '../../domain/quests';
+const makeId = (() =&gt; { let n = 0; return () =&gt; `id${++n}`; })();
+const q = createQuest({ title: 'Ship it', why: '', targetDate: '2026-12-01', hoursPerWeek: 5,
+  milestones: [{ title: 'M', tasks: [{ title: 'T', minutes: null }] }] }, new Date(2026, 8, 1), makeId);
+const base = addQuest(emptyState(), q);
+const withSettings = (over) =&gt; ({ ...base, settings: { ...base.settings, ...over } });
+
+it('converts alert-after minutes to seconds', () =&gt;
+  expect(buildWatcherConfig(withSettings({ alertAfterMinutes: 15 })).thresholdSeconds).toBe(900));
+it('supports the 30-second dev option', () =&gt;
+  expect(buildWatcherConfig(withSettings({ alertAfterMinutes: 0.5 })).thresholdSeconds).toBe(30));
+it.each([['gentle', 120], ['normal', 120], ['savage', 60]])('%s escalation wait', (level, secs) =&gt;
+  expect(buildWatcherConfig(withSettings({ sarcasmLevel: level })).cooldownSeconds).toBe(secs));
+it('labels callouts with the focus quest', () =&gt; expect(buildWatcherConfig(base).goalLabel).toBe('Ship it'));
+it('sends 0 when there is no daily limit', () =&gt;
+  expect(buildWatcherConfig(withSettings({ dailyLimitMinutes: null })).dailyLimitMinutes).toBe(0));
+it('passes tracked packages and level through', () =&gt;
+  expect(buildWatcherConfig(withSettings({ trackedPackages: ['a'], sarcasmLevel: 'gentle' })))
+    .toMatchObject({ watchedPackages: ['a'], sarcasmLevel: 'gentle' }));</code></pre>
+<ul>
+<li>[ ] <strong>Step 2:</strong> run → FAIL. <strong>Step 3:</strong> implement. <strong>Step 4:</strong> run → PASS. <strong>Step 5:</strong> commit <code>Derive watcher config from app state</code>.</li>
+</ul>
+</div>
+
+<div class="task">
+<h3>Task 8: Router shell, store and design system</h3>
+<p><strong>Files:</strong> create <code>src/app/_layout.tsx</code>, <code>src/app/(tabs)/_layout.tsx</code>, <code>src/store/AppStore.tsx</code>, <code>src/ui/theme.ts</code>, <code>src/ui/Icon.tsx</code>, <code>src/ui/Text.tsx</code>, <code>src/ui/Button.tsx</code>, <code>src/ui/Card.tsx</code>, <code>src/ui/Chip.tsx</code>, <code>src/ui/ProgressBar.tsx</code>, <code>src/ui/Spine.tsx</code>, <code>src/ui/Segmented.tsx</code>, <code>src/ui/RadioGroup.tsx</code>, <code>src/ui/Toggle.tsx</code>, <code>src/ui/TaskRow.tsx</code>, <code>src/ui/TopBar.tsx</code>, <code>src/ui/Screen.tsx</code>, <code>src/ui/TabBar.tsx</code>, <code>src/features/permissions/usePermissions.ts</code>; modify <code>package.json</code> (<code>"main": "expo-router/entry"</code>), <code>app.json</code> (scheme <code>laterme</code>, <code>experiments.typedRoutes</code>, background <code>#0B0D12</code>); delete the superseded files listed above.</p>
+<p><strong>Produces:</strong></p>
+<pre><code>// AppStore.tsx
+type Action = { type: 'hydrate'; state: AppState } | { type: 'addQuest'; quest: Quest }
+  | { type: 'toggleTask'; questId: string; taskId: string } | { type: 'setFocus'; questId: string }
+  | { type: 'setStatus'; questId: string; status: QuestStatus } | { type: 'deleteQuest'; questId: string }
+  | { type: 'updateSettings'; patch: Partial&lt;AccountabilitySettings&gt; };
+useAppStore(): { state: AppState; ready: boolean; dispatch: (a: Action) =&gt; void }
+// usePermissions.ts
+usePermissions(): { usage: boolean; overlay: boolean; notifications: boolean; refresh(): Promise&lt;void&gt;;
+  requestNotifications(): Promise&lt;void&gt; }   // PermissionsAndroid POST_NOTIFICATIONS; refresh on AppState 'active'
+// theme.ts: colors (Global constraints), radius {s:8,m:12,l:16,xl:20,pill:999}, space {1:4 … 10:64},
+//   pad 20, fonts {regular:'Inter_400Regular', medium:'Inter_500Medium', semibold:'Inter_600SemiBold', bold:'Inter_700Bold'}
+// Icon.tsx: &lt;Icon name size color /&gt; over Questify's ICON_PATHS (home, quests, focus, stats, profile, bell, back, next,
+//   check, plus, flame, clock, settings, x, alert, calendar, sparkles, eye, up, down, edit, trash, shield, phone, flag, map)</code></pre>
+<ul>
+<li>[ ] <strong>Step 1:</strong> <code>npx expo install expo-router react-native-safe-area-context react-native-screens expo-linking expo-constants react-native-svg @expo-google-fonts/inter expo-splash-screen @react-native-community/datetimepicker</code>.</li>
+<li>[ ] <strong>Step 2:</strong> reducer delegates to <code>quests.ts</code> functions (already tested); provider hydrates via <code>loadAppState</code>, saves on change after hydrate, and calls <code>syncWatcher</code> on change and when the app returns to foreground.</li>
+<li>[ ] <strong>Step 3:</strong> root layout loads Inter 400/500/600/700, holds the splash until fonts and store are ready, wraps a dark <code>Stack</code> (no headers; screens draw <code>TopBar</code>). Tabs layout uses <code>TabBar</code> styled like Questify's nav (62px, icon + label, violet active).</li>
+<li>[ ] <strong>Step 4:</strong> primitives mirror Questify CSS components (<code>.card</code>, <code>.chip</code>, <code>.bar</code>, <code>.segmented</code>, <code>.radio</code>, <code>.toggle</code>, <code>.task</code>, <code>.btn</code> primary/secondary/tertiary). All numbers use <code>fontVariant: ['tabular-nums']</code>; touch targets ≥ 44px; <code>accessibilityRole</code> and <code>accessibilityState</code> set on checkbox / radio / switch.</li>
+<li>[ ] <strong>Step 5:</strong> <code>npx tsc --noEmit</code> and <code>npx jest</code> green. UI is presentation over tested logic, so it is verified on the emulator (Task 11) rather than unit-tested.</li>
+<li>[ ] <strong>Step 6:</strong> commit <code>Switch to Expo Router with Questify design system and app store</code>.</li>
+</ul>
+</div>
+
+<div class="task">
+<h3>Task 9: Quest creation flow and daily-loop screens</h3>
+<p><strong>Files:</strong> create <code>src/app/create/_layout.tsx</code> (Stack + draft context), <code>src/app/create/index.tsx</code>, <code>src/app/create/details.tsx</code>, <code>src/app/create/steps.tsx</code>, <code>src/app/create/done.tsx</code>, <code>src/app/(tabs)/index.tsx</code>, <code>src/app/(tabs)/quests.tsx</code>, <code>src/app/quest/[id].tsx</code>, <code>src/app/milestone/[questId]/[milestoneId].tsx</code>, <code>src/features/quests/EmptyQuests.tsx</code>.</p>
+<p><strong>Consumes:</strong> <code>useAppStore</code>, all <code>quests.ts</code> queries, <code>projectQuest</code>, <code>formatDate</code>, <code>formatPercent</code>, <code>validateDraft</code>, <code>createQuest</code>, <code>makeId</code>, UI primitives, <code>usePermissions</code>. Home's attention card is added in Task 10, which builds the usage hook it needs.</p>
+<table>
+<tr><th>Screen</th><th>Must do</th></tr>
+<tr><td>Create goal</td><td>Large multiline field; presets “Become a better frontend engineer”, “Run a half marathon”, “Read 12 books this year”, “Ship a side project”; Next disabled until non-blank.</td></tr>
+<tr><td>Details</td><td>Why (optional), target date via <code>DateTimePickerAndroid.open</code> (min tomorrow) plus quick chips +1 / +3 / +6 months, hours per week stepper (1–40, default 5).</td></tr>
+<tr><td>Steps</td><td>Milestones with tasks; add / rename / move up / move down / remove; minutes input per task; Create shows <code>validateDraft</code> error inline.</td></tr>
+<tr><td>Done</td><td>“Quest created”, first task, buttons Home and View roadmap; back navigation cannot re-create.</td></tr>
+<tr><td>Home</td><td>Greeting by time of day; focus-quest card (title, progress bar, %, next milestone, Continue → milestone); Today list (<code>todayTasks</code>, tickable); permissions banner when usage or overlay access missing; empty state with create action when no quests.</td></tr>
+<tr><td>Quests</td><td>Segmented Active / Paused / Completed with counts; rows with progress; long-press or options sheet: Set as focus, Pause / Resume, Complete, Delete (confirm); FAB → create.</td></tr>
+<tr><td>Quest detail</td><td>Title, big %, deadline, projected finish (danger colour when slipping or never), why card, the journey: Spine with done (mint), current (“You are here”, violet), upcoming nodes → milestone.</td></tr>
+<tr><td>Milestone detail</td><td>Title, progress, tasks as TaskRow with minutes meta; tick updates progress live; when the last task is ticked show a toast “Milestone done — next: {title}”.</td></tr>
+</table>
+<ul>
+<li>[ ] <strong>Step 1:</strong> build the four create screens; <code>npx tsc --noEmit</code> clean.</li>
+<li>[ ] <strong>Step 2:</strong> build Home, Quests, Quest detail, Milestone detail; <code>npx tsc --noEmit</code> and <code>npx jest</code> green.</li>
+<li>[ ] <strong>Step 3:</strong> commit <code>Add quest creation and daily loop screens</code>.</li>
+</ul>
+</div>
+
+<div class="task">
+<h3>Task 10: Attention, app detail and accountability screens</h3>
+<p><strong>Files:</strong> create <code>src/features/attention/useUsageSnapshot.ts</code>, <code>src/features/attention/appLabels.ts</code>, <code>src/features/attention/AttentionCard.tsx</code>, <code>src/app/(tabs)/attention.tsx</code>, <code>src/app/app-usage/[pkg].tsx</code>, <code>src/app/accountability.tsx</code>, <code>src/features/permissions/PermissionsMissing.tsx</code>; modify <code>src/app/(tabs)/index.tsx</code> (mount <code>AttentionCard</code>: today's tracked total, “Over limit” chip when above limit, tap → Attention).</p>
+<p><strong>Consumes:</strong> <code>UsageStats.getUsageEvents</code>, <code>toIntervals</code>, <code>opensByPackage</code>, <code>minutesByPackage</code>, <code>hourlyMinutes</code>, <code>dailyMinutes</code>, <code>startOfLocalDay</code>, <code>observationLine</code>, <code>previewLine</code>, <code>costOfMinutes</code>, <code>formatMinutes</code>, <code>useAppStore</code>, <code>usePermissions</code>. <strong>Produces:</strong></p>
+<pre><code>interface UsageSnapshot { loading: boolean; apps: AppUsage[] /* today, sorted desc */; totalToday: number;
+  hourly: Record&lt;string, number[]&gt;; last7: Record&lt;string, number[]&gt;; thisWeek: number; lastWeek: number | null;
+  refresh(): Promise&lt;void&gt; }
+useUsageSnapshot(packages: string[]): UsageSnapshot   // 14 days of events; refresh on focus and every 30s
+appLabel(pkg: string): string                         // known names, else package tail
+KNOWN_APPS: Record&lt;string, string&gt;                    // Instagram, YouTube, TikTok, X, Reddit, Snapchat, Chrome</code></pre>
+<table>
+<tr><th>Screen</th><th>Must do</th></tr>
+<tr><td>Attention</td><td>Today total (display size) vs daily limit with bar and “Over limit” chip; per-app bars (orange fill) → app detail; observation card when <code>observationLine</code> returns text; this week vs last with change %, or “Not enough history yet” when <code>lastWeek</code> is null; settings icon and “Adjust accountability” → Accountability; permissions-missing state instead of data when usage access is off.</td></tr>
+<tr><td>App detail</td><td>Today's minutes and opens chip; hourly bars (peak highlighted); last 7 days; “What it cost”: minutes as task equivalents of the focus quest's next task (hidden when null) and days of weekly budget.</td></tr>
+<tr><td>Accountability</td><td>Intro line; Distraction alerts toggle; Sarcasm radio (Gentle “A tap on the shoulder.”, Normal “Honest, with a raised eyebrow.”, Savage “You asked for this.”) with a note under Gentle when notifications are off; Alert after segmented (plus 30 s in <code>__DEV__</code>); Daily limit segmented (plus 1m in <code>__DEV__</code>); Tracked apps (known-app toggles + add package field + remove); Permissions rows with fix buttons (usage, overlay, notifications); live preview card from <code>previewLine</code>; “Not today” pause / resume via <code>UsageStats.setPausedUntil</code>.</td></tr>
+</table>
+<ul>
+<li>[ ] <strong>Step 1:</strong> build the hook and screens; <code>npx tsc --noEmit</code> and <code>npx jest</code> green.</li>
+<li>[ ] <strong>Step 2:</strong> commit <code>Add attention and accountability screens on real usage data</code>.</li>
+</ul>
+</div>
+
+<div class="task">
+<h3>Task 11: Build, upgrade-in-place and end-to-end verification</h3>
+<p><strong>Files:</strong> modify <code>README.md</code> (architecture, screens, callout model, test commands).</p>
+<ul>
+<li>[ ] <strong>Step 1:</strong> <code>npx expo prebuild -p android --clean</code>; debug build and install <em>over</em> the Phase 1 build already on <code>Medium_Phone_API_35</code> (<code>adb install -r</code>), no uninstall.</li>
+<li>[ ] <strong>Step 2: migration.</strong> Home shows quest “Backend engineer role by December” as focus with task “DDIA chapter 7”; Accountability shows Chrome tracked and Alert after 5 min.</li>
+<li>[ ] <strong>Step 3: create flow.</strong> Create a second quest with two milestones end to end; it does not steal focus; roadmap renders spine states.</li>
+<li>[ ] <strong>Step 4: milestone.</strong> Tick all tasks of a milestone; progress updates; current node advances.</li>
+<li>[ ] <strong>Step 5: callouts.</strong> Alert after 30 s (dev option), Chrome tracked: gentle → notification (no overlay); normal → restyled overlay; savage → overlay with savage copy, second trigger ~1 min after dismiss. Daily limit: pick the dev-only 1-minute limit with Alert after set to 30 min; after a minute in Chrome exactly one “Daily limit reached.” callout fires, and none after re-opening Chrome.</li>
+<li>[ ] <strong>Step 6: attention.</strong> Attention totals roughly match <code>adb shell dumpsys usagestats</code> for Chrome; opens count increments after leaving and re-opening Chrome.</li>
+<li>[ ] <strong>Step 7: permissions.</strong> Revoke overlay (<code>adb shell appops set com.yuvraj.laterme SYSTEM_ALERT_WINDOW deny</code>): Home banner appears, normal level falls back to a notification.</li>
+<li>[ ] <strong>Step 8:</strong> release build, launch with Metro stopped; no crash in logcat.</li>
+<li>[ ] <strong>Step 9:</strong> commit <code>Document the Questify port</code>.</li>
+</ul>
+</div>
+
+<h2>Spec coverage</h2>
+<table>
+<tr><th>Spec section</th><th>Task</th></tr>
+<tr><td>Design system</td><td>8</td></tr>
+<tr><td>Screens (13)</td><td>9, 10</td></tr>
+<tr><td>Callouts: level → delivery, alert after, escalation wait, daily limit, alerts off, overlay restyle</td><td>6, 7, 10</td></tr>
+<tr><td>Roasts and tone</td><td>3</td></tr>
+<tr><td>Progress and ETA, “what it cost”</td><td>1, 2, 10</td></tr>
+<tr><td>Data and migration</td><td>1, 5, 11</td></tr>
+<tr><td>Error handling (revoked permissions, notifications denied, corrupt data)</td><td>5, 6, 8, 10, 11</td></tr>
+<tr><td>Testing (unit + emulator)</td><td>1–7, 11</td></tr>
+</table>
+</main>
+</body>
+</html>
