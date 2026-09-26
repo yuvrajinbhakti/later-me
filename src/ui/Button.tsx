@@ -48,7 +48,7 @@ export function Button({ label, onPress, kind = 'primary', small, icon, disabled
       ) : (
         <View style={styles.inner}>
           {icon ? <Icon name={icon} size={small ? 16 : 18} color={k.text} /> : null}
-          <Text style={[styles.label, small && styles.labelSmall]} color={k.text}>
+          <Text style={[styles.label, small && styles.labelSmall]} color={k.text} numberOfLines={1}>
             {label}
           </Text>
         </View>
@@ -61,7 +61,8 @@ const styles = StyleSheet.create({
   base: { minHeight: 48, paddingHorizontal: 20, borderRadius: radius.m, alignItems: 'center', justifyContent: 'center' },
   small: { minHeight: 38, paddingHorizontal: 14, borderRadius: radius.s },
   inner: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  label: { fontFamily: fonts.semibold, fontSize: 15, lineHeight: 20, letterSpacing: -0.15 },
+  // No negative letterSpacing: Android under-measures it on custom fonts and clips auto-sized buttons.
+  label: { fontFamily: fonts.semibold, fontSize: 15, lineHeight: 20 },
   labelSmall: { fontSize: 13.5 },
   disabled: { opacity: 0.38 },
   pressed: { transform: [{ scale: 0.975 }] },

@@ -5,6 +5,7 @@ import {
   deleteQuest,
   emptyState,
   focusQuest,
+  milestoneFinishedBy,
   milestoneState,
   nextTask,
   questProgress,
@@ -60,6 +61,22 @@ describe('createQuest', () => {
     expect(q.milestones.map((m) => m.title)).toEqual(['Real']);
     expect(q.milestones[0].tasks.map((t) => t.title)).toEqual(['Do it']);
   });
+
+  // An empty milestone would count as already done and skew progress.
+  it('drops a named milestone whose tasks are all blank', () => {
+    const q = createQuest(
+      {
+        ...draft,
+        milestones: [
+          { title: 'Real', tasks: [{ title: 'Do it', minutes: null }] },
+          { title: 'Race week', tasks: [{ title: '  ', minutes: null }] },
+        ],
+      },
+      NOW,
+      makeId,
+    );
+    expect(q.milestones.map((m) => m.title)).toEqual(['Real']);
+  });
 });
 
 describe('validateDraft', () => {
@@ -111,6 +128,30 @@ describe('progress and position', () => {
     expect(nextTask(q)).toBeNull();
     expect(currentMilestone(q)).toBeNull();
     expect(todayTasks(q)).toEqual([]);
+  });
+});
+
+describe('milestoneFinishedBy', () => {
+  it('reports the milestone and the next one when a tick finishes it', () => {
+    const q = tick(createQuest(draft, NOW, makeId), 0, 0);
+    const result = milestoneFinishedBy(q, q.milestones[0].tasks[1].id);
+    expect(result?.finished.title).toBe('Foundations');
+    expect(result?.next?.title).toBe('System design');
+  });
+
+  it('reports no next milestone when the last one finishes', () => {
+    const q = tick(tick(createQuest(draft, NOW, makeId), 0, 0), 0, 1);
+    expect(milestoneFinishedBy(q, q.milestones[1].tasks[0].id)).toMatchObject({ next: null });
+  });
+
+  it('is null when the tick leaves the milestone unfinished', () => {
+    const q = createQuest(draft, NOW, makeId);
+    expect(milestoneFinishedBy(q, q.milestones[0].tasks[0].id)).toBeNull();
+  });
+
+  it('is null when un-ticking', () => {
+    const q = tick(tick(createQuest(draft, NOW, makeId), 0, 0), 0, 1);
+    expect(milestoneFinishedBy(q, q.milestones[0].tasks[1].id)).toBeNull();
   });
 });
 

@@ -24,7 +24,8 @@ export function ProgressBar({ value, tone = 'accent', tall, accessibilityLabel }
 }
 
 const styles = StyleSheet.create({
-  track: { height: 6, borderRadius: radius.pill, backgroundColor: colors.elevated, overflow: 'hidden' },
+  // Border tone, not elevated: an elevated track vanishes inside an elevated card at 0%.
+  track: { height: 6, borderRadius: radius.pill, backgroundColor: colors.border, overflow: 'hidden' },
   tall: { height: 8 },
   fill: { height: '100%', borderRadius: radius.pill },
 });

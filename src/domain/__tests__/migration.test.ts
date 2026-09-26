@@ -138,6 +138,14 @@ describe('parseState', () => {
     expect(parsed.quests[0].milestones[0].tasks).toEqual([q.milestones[0].tasks[0]]);
   });
 
+  it('drops milestones that have no tasks left', () => {
+    const s = valid();
+    const q = s.quests[0];
+    const withEmpty = { ...q, milestones: [...q.milestones, { id: 'empty', title: 'Race week', tasks: [] }] };
+    const parsed = parseState(JSON.stringify({ ...s, quests: [withEmpty] })).state!;
+    expect(parsed.quests[0].milestones.map((m) => m.id)).toEqual(q.milestones.map((m) => m.id));
+  });
+
   it('re-points focus at the newest active quest when the stored one is gone', () => {
     const s = valid();
     expect(parseState(JSON.stringify({ ...s, focusQuestId: 'missing' })).state?.focusQuestId).toBe(s.quests[0].id);

@@ -109,9 +109,11 @@ function parseTask(v: unknown): Task | null {
   };
 }
 
+/** A milestone without tasks would count as done, so one left empty is dropped. */
 function parseMilestone(v: unknown): Milestone | null {
   if (!isObject(v) || !isString(v.id) || !isString(v.title) || !Array.isArray(v.tasks)) return null;
-  return { id: v.id, title: v.title, tasks: v.tasks.map(parseTask).filter((t): t is Task => t !== null) };
+  const tasks = v.tasks.map(parseTask).filter((t): t is Task => t !== null);
+  return tasks.length > 0 ? { id: v.id, title: v.title, tasks } : null;
 }
 
 const STATUSES: QuestStatus[] = ['active', 'paused', 'completed'];

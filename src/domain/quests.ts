@@ -17,7 +17,7 @@ export function createQuest(draft: QuestDraft, now: Date, makeIdFn: () => string
         .filter((t) => t.title.trim() !== '')
         .map<Task>((t) => ({ id: makeIdFn(), title: t.title.trim(), minutes: t.minutes, done: false, doneAt: null })),
     }))
-    .filter((m) => m.title !== '');
+    .filter((m) => m.title !== '' && m.tasks.length > 0);
 
   return {
     id: makeIdFn(),
@@ -82,6 +82,15 @@ export function toggleTask(q: Quest, taskId: string, now: Date): Quest {
       ),
     })),
   };
+}
+
+/** The milestone that ticking this task would finish, and the one that becomes current after it. */
+export function milestoneFinishedBy(q: Quest, taskId: string): { finished: Milestone; next: Milestone | null } | null {
+  const milestone = q.milestones.find((m) => m.tasks.some((t) => t.id === taskId));
+  if (!milestone) return null;
+  const finishes = milestone.tasks.every((t) => (t.id === taskId ? !t.done : t.done));
+  if (!finishes) return null;
+  return { finished: milestone, next: currentMilestone(toggleTask(q, taskId, new Date(0))) };
 }
 
 export function focusQuest(s: AppState): Quest | null {
