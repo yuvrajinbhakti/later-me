@@ -150,6 +150,31 @@ describe('parseState', () => {
     const s = valid();
     expect(parseState(JSON.stringify({ ...s, focusQuestId: 'missing' })).state?.focusQuestId).toBe(s.quests[0].id);
   });
+
+  it('turns AI callouts on for a state saved before the setting existed', () => {
+    const { aiCallouts: _, ...older } = valid().settings;
+    expect(parseState(JSON.stringify({ ...valid(), settings: older })).state?.settings.aiCallouts).toBe(true);
+  });
+
+  it('keeps AI callouts off once turned off', () =>
+    expect(parseState(JSON.stringify({ ...valid(), settings: { ...DEFAULT_SETTINGS, aiCallouts: false } })).state?.settings.aiCallouts).toBe(
+      false,
+    ));
+
+  const set = { basis: 'b', createdAt: '2026-09-27T10:00:00.000Z', tiers: [['one line here'], [], []], limit: ['limit line'] };
+
+  it('round-trips saved AI callout lines', () => {
+    const s = { ...valid(), aiCallouts: set };
+    expect(parseState(JSON.stringify(s)).state?.aiCallouts).toEqual(set);
+  });
+
+  it.each([
+    ['a missing basis', { ...set, basis: 7 }],
+    ['non-string lines', { ...set, tiers: [[1], [], []] }],
+    ['the wrong number of tiers', { ...set, tiers: [[]] }],
+    ['a missing limit list', { ...set, limit: undefined }],
+  ])('drops saved AI lines with %s', (_, bad) =>
+    expect(parseState(JSON.stringify({ ...valid(), aiCallouts: bad })).state).not.toHaveProperty('aiCallouts'));
 });
 
 describe('normalizeSettings', () => {

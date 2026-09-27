@@ -1,5 +1,8 @@
+import type { RoastPayload } from '../../../modules/usage-stats';
 import { buildWatcherConfig, createWatcherSync, planSync, type WatcherNative } from '../config';
+import { calloutBasis } from '../../domain/aiCallouts';
 import { addQuest, createQuest, emptyState } from '../../domain/quests';
+import { buildRoastPools } from '../../domain/roasts';
 import type { AccountabilitySettings, AppState } from '../../domain/types';
 
 const makeId = (() => {
@@ -129,4 +132,34 @@ describe('createWatcherSync', () => {
     expect(sync(base)).toEqual({ action: 'start', ok: false });
     expect(sync(base).action).toBe('start');
   });
+});
+
+describe('AI-written lines', () => {
+  const aiState = (over: Partial<AccountabilitySettings> = {}): AppState => ({
+    ...withSettings(over),
+    aiCallouts: {
+      basis: calloutBasis('normal', q),
+      createdAt: '2026-09-27T10:00:00.000Z',
+      tiers: [['AI line one about {goal}.', 'AI line two about {task}.'], [], []],
+      limit: [],
+    },
+  });
+  const pushedRoasts = (s: AppState): RoastPayload => {
+    const pushed: RoastPayload[] = [];
+    const native: WatcherNative = {
+      hasUsageAccess: () => true,
+      isWatcherRunning: () => false,
+      startWatcher: (_config, roasts) => pushed.push(roasts) > 0,
+      stopWatcher: () => undefined,
+      setRoasts: () => undefined,
+    };
+    createWatcherSync(native)(s);
+    return pushed[0];
+  };
+
+  it('pushes them to the watcher while the setting is on', () =>
+    expect(pushedRoasts(aiState()).tiers[0]).toEqual(['AI line one about Ship it.', 'AI line two about T.']));
+
+  it('falls back to the built-in lines when the setting is off', () =>
+    expect(pushedRoasts(aiState({ aiCallouts: false }))).toEqual(buildRoastPools('normal', q)));
 });

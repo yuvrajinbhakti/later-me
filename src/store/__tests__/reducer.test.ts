@@ -58,3 +58,8 @@ it('unknown quest ids leave state unchanged', () => {
   expect(reducer(withQuest, { type: 'setStatus', questId: 'nope', status: 'paused' })).toBe(withQuest);
   expect(reducer(withQuest, { type: 'deleteQuest', questId: 'nope' })).toBe(withQuest);
 });
+
+it('setAiCallouts stores the latest batch of lines', () => {
+  const set = { basis: 'b', createdAt: NOW.toISOString(), tiers: [['line one here'], [], []], limit: [] };
+  expect(reducer(withQuest, { type: 'setAiCallouts', set }).aiCallouts).toBe(set);
+});

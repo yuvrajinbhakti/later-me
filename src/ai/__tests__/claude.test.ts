@@ -1,5 +1,8 @@
-import { ROADMAP_TOOL, RoadmapError, buildRoadmapRequest, type RoadmapFailure } from '../../domain/roadmap';
-import { ANTHROPIC_URL, requestRoadmap, type FetchFn } from '../roadmapClient';
+import { AiError, type AiFailure } from '../../domain/ai';
+import { ROADMAP_TOOL, buildRoadmapRequest } from '../../domain/roadmap';
+import { CALLOUT_TOOL, buildCalloutRequest } from '../../domain/aiCallouts';
+import { createQuest } from '../../domain/quests';
+import { ANTHROPIC_URL, requestCallouts, requestRoadmap, type FetchFn } from '../claude';
 
 const TODAY = new Date(2026, 8, 26);
 const input = { title: 'Learn Spanish', why: '', targetDate: '2026-12-26', hoursPerWeek: 3 };
@@ -24,12 +27,12 @@ const goodBody = {
   ],
 };
 
-const failureOf = async (p: Promise<unknown>): Promise<RoadmapFailure | 'other'> => {
+const failureOf = async (p: Promise<unknown>): Promise<AiFailure | 'other'> => {
   try {
     await p;
     throw new Error('expected a failure');
   } catch (e) {
-    return e instanceof RoadmapError ? e.failure : 'other';
+    return e instanceof AiError ? e.failure : 'other';
   }
 };
 
@@ -58,9 +61,9 @@ it("passes on the API's reason for a rejected request", async () => {
   const err = await requestRoadmap(input, KEY, {
     fetchFn: reply(400, { error: { type: 'invalid_request_error', message: 'Your credit balance is too low.' } }),
   }).catch((e: unknown) => e);
-  expect(err).toBeInstanceOf(RoadmapError);
-  expect((err as RoadmapError).failure).toBe('rejected');
-  expect((err as RoadmapError).detail).toBe('Your credit balance is too low.');
+  expect(err).toBeInstanceOf(AiError);
+  expect((err as AiError).failure).toBe('rejected');
+  expect((err as AiError).detail).toBe('Your credit balance is too low.');
 });
 
 it('survives an error page that is not JSON', async () =>
@@ -108,4 +111,16 @@ it('lets a caller cancel without reporting a failure', async () => {
   const pending = requestRoadmap(input, KEY, { fetchFn: hanging, signal: controller.signal });
   controller.abort();
   expect(await failureOf(pending)).toBe('other');
+});
+
+it('requests callout lines for the focus quest and parses them', async () => {
+  const quest = createQuest(
+    { title: 'Learn Spanish', why: '', targetDate: '2026-12-26', hoursPerWeek: 3, milestones: [{ title: 'M', tasks: [{ title: 'T', minutes: 20 }] }] },
+    TODAY,
+    () => 'id',
+  );
+  const lines = ['{sessionMinutes} minutes of feed. {goal} waits.', 'Still here? "{task}" is not.'];
+  const fetchFn = jest.fn(reply(200, { content: [{ type: 'tool_use', name: CALLOUT_TOOL, input: { tier1: lines } }] }));
+  expect(await requestCallouts('savage', quest, KEY, { fetchFn, today: TODAY })).toEqual({ tiers: [lines, [], []], limit: [] });
+  expect(JSON.parse(fetchFn.mock.calls[0][1].body)).toEqual(buildCalloutRequest('savage', quest, TODAY));
 });

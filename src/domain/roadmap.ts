@@ -1,7 +1,7 @@
+import { AI_MODEL, AiError, isRecord, toolInput } from './ai';
 import { daysBetween, parseLocalDate, toLocalYmd } from './format';
 import type { QuestDraft } from './types';
 
-export const ROADMAP_MODEL = 'claude-sonnet-5';
 export const ROADMAP_TOOL = 'propose_roadmap';
 
 const MAX_MILESTONES = 8;
@@ -43,7 +43,7 @@ export function buildRoadmapRequest(input: RoadmapInput, today: Date) {
   ].filter((line): line is string => line !== null);
 
   return {
-    model: ROADMAP_MODEL,
+    model: AI_MODEL,
     max_tokens: 4096,
     system: SYSTEM,
     tools: [
@@ -85,30 +85,16 @@ export function buildRoadmapRequest(input: RoadmapInput, today: Date) {
   };
 }
 
-export type RoadmapFailure = 'bad-key' | 'rate-limit' | 'overloaded' | 'network' | 'timeout' | 'bad-response' | 'rejected';
-
-export class RoadmapError extends Error {
-  constructor(
-    readonly failure: RoadmapFailure,
-    readonly detail?: string,
-  ) {
-    super(describeFailure(failure, detail));
-  }
-}
-
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 const cleanTitle = (v: unknown) => (typeof v === 'string' ? v.trim().slice(0, MAX_TITLE) : '');
 const cleanMinutes = (v: unknown) =>
   typeof v === 'number' && Number.isFinite(v) ? Math.min(600, Math.max(5, Math.round(v))) : null;
 
 /** The model's output is untrusted: anything malformed is dropped rather than shown. */
 export function parseRoadmapResponse(body: unknown): Roadmap {
-  const content = isRecord(body) && Array.isArray(body.content) ? body.content : [];
-  const call = content.find((b) => isRecord(b) && b.type === 'tool_use' && b.name === ROADMAP_TOOL);
-  const toolInput = isRecord(call) && isRecord(call.input) ? call.input : null;
-  if (!toolInput || !Array.isArray(toolInput.milestones)) throw new RoadmapError('bad-response');
+  const input = toolInput(body, ROADMAP_TOOL);
+  if (!input || !Array.isArray(input.milestones)) throw new AiError('bad-response');
 
-  const milestones = toolInput.milestones
+  const milestones = input.milestones
     .filter(isRecord)
     .map((m) => ({
       title: cleanTitle(m.title),
@@ -120,41 +106,11 @@ export function parseRoadmapResponse(body: unknown): Roadmap {
     }))
     .filter((m) => m.title !== '' && m.tasks.length > 0)
     .slice(0, MAX_MILESTONES);
-  if (milestones.length === 0) throw new RoadmapError('bad-response');
+  if (milestones.length === 0) throw new AiError('bad-response');
 
-  const note = typeof toolInput.note === 'string' && toolInput.note.trim() ? toolInput.note.trim() : null;
+  const note = typeof input.note === 'string' && input.note.trim() ? input.note.trim() : null;
   return { milestones, note };
 }
-
-export function failureForStatus(status: number): RoadmapFailure {
-  if (status === 401 || status === 403) return 'bad-key';
-  if (status === 429) return 'rate-limit';
-  if (status >= 500) return 'overloaded';
-  return 'rejected';
-}
-
-export function describeFailure(failure: RoadmapFailure, detail?: string): string {
-  switch (failure) {
-    case 'bad-key':
-      return "Anthropic didn't accept that API key. Check it in Accountability.";
-    case 'rate-limit':
-      return 'Too many requests. Try again in a minute.';
-    case 'overloaded':
-      return 'Anthropic is busy right now. Try again shortly.';
-    case 'network':
-      return "Couldn't reach Anthropic. Check your connection.";
-    case 'timeout':
-      return 'That took too long. Try again.';
-    case 'bad-response':
-      return 'The draft came back garbled. Try again.';
-    case 'rejected':
-      return detail ? `Anthropic said: ${detail}` : 'Anthropic rejected the request.';
-  }
-}
-
-export const isPlausibleApiKey = (key: string) => /^sk-ant-[\w-]{20,}$/.test(key.trim());
-
-export const maskApiKey = (key: string) => `${key.slice(0, 7)}…${key.slice(-4)}`;
 
 /** Whether drafting would overwrite anything the user typed. */
 export const hasDraftSteps = (milestones: DraftMilestones) =>

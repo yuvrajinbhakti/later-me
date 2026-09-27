@@ -1,5 +1,5 @@
 import { addQuest, deleteQuest, setFocus, setQuestStatus, toggleTask } from '../domain/quests';
-import type { AccountabilitySettings, AppState, Quest, QuestStatus } from '../domain/types';
+import type { AccountabilitySettings, AiCalloutSet, AppState, Quest, QuestStatus } from '../domain/types';
 
 export type Action =
   | { type: 'hydrate'; state: AppState }
@@ -8,7 +8,8 @@ export type Action =
   | { type: 'setFocus'; questId: string }
   | { type: 'setStatus'; questId: string; status: QuestStatus }
   | { type: 'deleteQuest'; questId: string }
-  | { type: 'updateSettings'; patch: Partial<AccountabilitySettings> };
+  | { type: 'updateSettings'; patch: Partial<AccountabilitySettings> }
+  | { type: 'setAiCallouts'; set: AiCalloutSet };
 
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
@@ -32,5 +33,7 @@ export function reducer(state: AppState, action: Action): AppState {
       return deleteQuest(state, action.questId);
     case 'updateSettings':
       return { ...state, settings: { ...state.settings, ...action.patch } };
+    case 'setAiCallouts':
+      return { ...state, aiCallouts: action.set };
   }
 }

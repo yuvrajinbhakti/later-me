@@ -1,21 +1,10 @@
 import type { RoastPayload } from '../../modules/usage-stats';
+import { calloutBasis } from './aiCallouts';
 import { daysBetween, formatDate, formatMinutes, parseLocalDate } from './format';
 import { nextTask } from './quests';
-import type { AppUsage, Quest, SarcasmLevel } from './types';
+import type { AiCalloutSet, AppUsage, Quest, SarcasmLevel } from './types';
 
 export type RoastPools = RoastPayload;
-
-/** Callouts describe behaviour, never character. */
-export const BANNED_PHRASES = [
-  'lazy',
-  'pathetic',
-  'loser',
-  'decoration',
-  'wasted potential',
-  'useless',
-  'failure',
-  'shame',
-];
 
 interface QuestContext {
   title: string;
@@ -152,16 +141,25 @@ function contextFor(quest: Quest): QuestContext {
   };
 }
 
-export function buildRoastPools(level: SarcasmLevel, quest: Quest | null): RoastPools {
+const fillQuest = (line: string, c: QuestContext) => line.split('{goal}').join(c.title).split('{task}').join(c.task);
+
+/** AI lines replace the built-in ones tier by tier, and only when they were written for this quest and level. */
+export function buildRoastPools(level: SarcasmLevel, quest: Quest | null, ai?: AiCalloutSet | null): RoastPools {
   if (!quest) return NO_QUEST_POOLS[level];
   const c = contextFor(quest);
   const pools = QUEST_POOLS[level];
-  return { tiers: pools.tiers.map((tier) => tier.map((line) => line(c))), limit: pools.limit.map((line) => line(c)) };
+  const written = ai && ai.basis === calloutBasis(level, quest) ? ai : null;
+  const pick = (builtIn: Line[], aiLines: string[] | undefined) =>
+    aiLines && aiLines.length > 0 ? aiLines.map((line) => fillQuest(line, c)) : builtIn.map((line) => line(c));
+  return {
+    tiers: pools.tiers.map((tier, i) => pick(tier, written?.tiers[i])),
+    limit: pick(pools.limit, written?.limit),
+  };
 }
 
-export function previewLine(level: SarcasmLevel, quest: Quest | null, now: Date): string {
+export function previewLine(level: SarcasmLevel, quest: Quest | null, now: Date, ai?: AiCalloutSet | null): string {
   const daysLeft = quest ? Math.max(daysBetween(now, parseLocalDate(quest.targetDate)), 0) : 0;
-  return buildRoastPools(level, quest)
+  return buildRoastPools(level, quest, ai)
     .tiers[0][0].replace('{sessionMinutes}', '17')
     .replace('{todayMinutes}', '42')
     .replace('{daysLeft}', String(daysLeft));

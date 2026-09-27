@@ -39,6 +39,19 @@ export interface AccountabilitySettings {
   alertAfterMinutes: AlertAfter;
   dailyLimitMinutes: DailyLimit;
   trackedPackages: string[];
+  /** Let Claude rewrite callout lines for the focus quest; needs an API key. */
+  aiCallouts: boolean;
+}
+
+/**
+ * Callout lines Claude wrote for one quest at one sarcasm level. {goal} and {task} are filled when pools
+ * are built, the minute and day placeholders when a callout fires. An empty tier means "use built-in lines".
+ */
+export interface AiCalloutSet {
+  basis: string;
+  createdAt: string;
+  tiers: string[][];
+  limit: string[];
 }
 
 export interface AppState {
@@ -46,6 +59,7 @@ export interface AppState {
   quests: Quest[];
   focusQuestId: string | null;
   settings: AccountabilitySettings;
+  aiCallouts?: AiCalloutSet;
 }
 
 export interface QuestDraft {
@@ -74,4 +88,5 @@ export const DEFAULT_SETTINGS: AccountabilitySettings = {
   alertAfterMinutes: 10,
   dailyLimitMinutes: 120,
   trackedPackages: ['com.instagram.android'],
+  aiCallouts: true,
 };

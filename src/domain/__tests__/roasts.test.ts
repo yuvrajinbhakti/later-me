@@ -1,6 +1,8 @@
-import { BANNED_PHRASES, buildRoastPools, observationLine, previewLine } from '../roasts';
+import { buildRoastPools, observationLine, previewLine } from '../roasts';
+import { BANNED_PHRASES } from '../tone';
+import { calloutBasis } from '../aiCallouts';
 import { createQuest, toggleTask } from '../quests';
-import type { Quest, SarcasmLevel } from '../types';
+import type { AiCalloutSet, Quest, SarcasmLevel } from '../types';
 
 const NOW = new Date(2026, 8, 26, 12, 0);
 const makeId = (() => {
@@ -93,6 +95,42 @@ it('preview fills sample numbers and the real days left', () => {
     expect(previewLine(l, quest, NOW)).not.toMatch(/\{/);
     expect(previewLine(l, null, NOW)).not.toMatch(/\{/);
   });
+});
+
+describe('with AI-written lines', () => {
+  const ai = (over: Partial<AiCalloutSet> = {}): AiCalloutSet => ({
+    basis: calloutBasis('normal', quest),
+    createdAt: NOW.toISOString(),
+    tiers: [
+      ['{goal} is waiting. {sessionMinutes} minutes of feed so far.', '"{task}" beats reel number {todayMinutes}.'],
+      [],
+      ['Third time. {daysLeft} days left for "{task}".', 'Put it down. {goal} will not do itself.'],
+    ],
+    limit: [],
+    ...over,
+  });
+
+  it('uses them, filling in the goal and next task but leaving the live numbers', () =>
+    expect(buildRoastPools('normal', quest, ai()).tiers[0]).toEqual([
+      'Become a better frontend engineer is waiting. {sessionMinutes} minutes of feed so far.',
+      '"Learn sharding" beats reel number {todayMinutes}.',
+    ]));
+
+  it('keeps the built-in lines for any tier the AI left empty', () => {
+    const pools = buildRoastPools('normal', quest, ai());
+    expect(pools.tiers[1]).toEqual(buildRoastPools('normal', quest).tiers[1]);
+    expect(pools.limit).toEqual(buildRoastPools('normal', quest).limit);
+  });
+
+  it('ignores lines written for another quest or level', () => {
+    expect(buildRoastPools('savage', quest, ai())).toEqual(buildRoastPools('savage', quest));
+    expect(buildRoastPools('normal', quest, ai({ basis: 'stale' }))).toEqual(buildRoastPools('normal', quest));
+  });
+
+  it('ignores them without a focus quest', () => expect(buildRoastPools('normal', null, ai())).toEqual(buildRoastPools('normal', null)));
+
+  it('previews the first AI line', () =>
+    expect(previewLine('normal', quest, NOW, ai())).toBe('Become a better frontend engineer is waiting. 17 minutes of feed so far.'));
 });
 
 describe('observationLine', () => {

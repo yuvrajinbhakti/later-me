@@ -50,7 +50,7 @@ export function createWatcherSync(native: WatcherNative) {
 
   return function sync(s: AppState): { action: SyncAction; ok: boolean } {
     const config = buildWatcherConfig(s);
-    const pools = buildRoastPools(s.settings.sarcasmLevel, focusQuest(s));
+    const pools = buildRoastPools(s.settings.sarcasmLevel, focusQuest(s), s.settings.aiCallouts ? s.aiCallouts : null);
     const configKey = JSON.stringify(config);
     const roastsKey = JSON.stringify(pools);
     const action = planSync({

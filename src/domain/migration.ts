@@ -6,6 +6,7 @@ import {
   DEV_ALERT_AFTER_OPTIONS,
   DEV_DAILY_LIMIT_OPTIONS,
   type AccountabilitySettings,
+  type AiCalloutSet,
   type AppState,
   type Milestone,
   type Quest,
@@ -158,7 +159,17 @@ function parseSettings(v: unknown): AccountabilitySettings {
       : d.dailyLimitMinutes,
     trackedPackages:
       Array.isArray(s.trackedPackages) && s.trackedPackages.every(isString) ? s.trackedPackages : d.trackedPackages,
+    aiCallouts: typeof s.aiCallouts === 'boolean' ? s.aiCallouts : d.aiCallouts,
   };
+}
+
+const isLines = (v: unknown): v is string[] => Array.isArray(v) && v.every(isString);
+
+/** Saved AI lines are a cache: anything off-shape is dropped and simply written again. */
+function parseAiCallouts(v: unknown): AiCalloutSet | undefined {
+  if (!isObject(v) || !isString(v.basis) || !isString(v.createdAt) || !isLines(v.limit)) return undefined;
+  if (!Array.isArray(v.tiers) || v.tiers.length !== 3 || !v.tiers.every(isLines)) return undefined;
+  return { basis: v.basis, createdAt: v.createdAt, tiers: v.tiers, limit: v.limit };
 }
 
 /** Unknown keys are ignored and missing ones defaulted, so later versions can add fields safely. */
@@ -177,12 +188,14 @@ export function parseState(raw: string | null): { state: AppState | null; corrup
     : [];
   const stored = quests.find((q) => q.status === 'active' && q.id === value.focusQuestId);
 
+  const aiCallouts = parseAiCallouts(value.aiCallouts);
   return {
     state: {
       version: 2,
       quests,
       focusQuestId: stored?.id ?? newestActiveId(quests, null),
       settings: parseSettings(value.settings),
+      ...(aiCallouts ? { aiCallouts } : {}),
     },
     corrupt: false,
   };

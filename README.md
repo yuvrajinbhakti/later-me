@@ -21,8 +21,9 @@ The UI follows the Questify design (dark surfaces, one violet accent for "you ar
 | "Not today" pause, alerts on/off, restart after reboot or app update | ✅ |
 | Upgrade from the Phase 1 build keeps the goal and its step progress | ✅ |
 | Draft with AI: milestones and tasks from the goal, date and hours (Claude Sonnet 5, your own API key) | ✅ key in Android Keystore, no server |
+| AI-written callouts: a fresh batch of lines for the focus quest and sarcasm level each day, built-in lines as fallback | ✅ written ahead, so callouts work offline |
 | iOS (Screen Time `FamilyControls` shield) | ⏳ needs Xcode; request the Family Controls entitlement early |
-| AI-written callouts, accounts, focus timer, XP and achievements | ⏳ later cycles |
+| Accounts, focus timer, XP and achievements | ⏳ later cycles |
 
 ## Architecture
 
@@ -39,10 +40,13 @@ src/
     usage.ts                raw usage events → intervals, opens, hourly, daily, snapshot
     migration.ts            Phase 1 data → v2 state; tolerant parsing
     permissions.ts          what each sarcasm level needs
-    roadmap.ts              AI draft: request, response cleanup, error messages
+    ai.ts                   shared model, failures, API key checks, tool-call parsing
+    roadmap.ts              AI draft: request and response cleanup
+    aiCallouts.ts           AI callouts: request, line validation, when to refresh
+    tone.ts                 phrases no callout may use, built-in or AI
   store/                    reducer, persistence, provider (syncs the watcher)
   watcher/config.ts         AppState → native config; dedupes pushes
-  ai/                       Anthropic Messages API client; API key in SecureStore
+  ai/                       Messages API client, API key in SecureStore, callout refresher
   features/                 hooks and composite components
   ui/                       design system primitives
 modules/usage-stats/        local Expo module (Kotlin)
@@ -89,9 +93,11 @@ The emulator has no Instagram. In Accountability, turn on Chrome under Tracked a
 
 If Attention shows zero usage on an emulator that definitely has some, check `adb shell dumpsys usagestats | head -12`. A `timeRange` in the future means the emulator's clock jumped at some point and Android's usage store is stuck in that period. Only a fresh AVD fixes it.
 
-### Draft with AI
+### AI features
 
-Paste an Anthropic API key (console.anthropic.com → API keys) under Accountability → AI drafting. The Steps screen of a new quest then offers **Draft with AI**, which sends the quest's name, why, target date and hours per week to Claude and fills in editable milestones plus a one-line read on whether the timeline is realistic. A draft costs a few cents at most.
+Paste an Anthropic API key (console.anthropic.com → API keys) under Accountability → AI. The Steps screen of a new quest then offers **Draft with AI**, which sends the quest's name, why, target date and hours per week to Claude and fills in editable milestones plus a one-line read on whether the timeline is realistic. A draft costs a few cents at most.
+
+With a key saved, **AI-written callouts** (on by default, same section) has Claude write the callout lines for the focus quest at the current sarcasm level: when either changes, and otherwise once a day while the app is open. Lines use `{goal}`, `{task}`, `{sessionMinutes}`, `{todayMinutes}` and `{daysLeft}`, so ticking tasks never makes them stale. Each line is checked for length, known placeholders and the banned-phrase list; any tier that comes back short falls back to the built-in lines. The watcher reads the saved batch, so a callout never waits on the network.
 
 ### Real-phone notes
 

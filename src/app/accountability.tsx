@@ -15,7 +15,7 @@ import {
   type DailyLimit,
   type SarcasmLevel,
 } from '../domain/types';
-import { ApiKeySection } from '../features/ai/ApiKeySection';
+import { AiSection } from '../features/ai/AiSection';
 import { KNOWN_APPS, appLabel } from '../features/attention/appLabels';
 import { PERMISSION_NAMES } from '../features/permissions/PermissionsBanner';
 import { usePermissions } from '../features/permissions/usePermissions';
@@ -86,7 +86,7 @@ export default function AccountabilityScreen() {
     accessibilityLabel: m === null ? 'No daily limit' : `${formatMinutes(m)} daily limit`,
   }));
   const customPkgs = s.trackedPackages.filter((p) => !KNOWN_APPS[p]);
-  const preview = previewLine(s.sarcasmLevel, focusQuest(state), new Date());
+  const preview = previewLine(s.sarcasmLevel, focusQuest(state), new Date(), s.aiCallouts ? state.aiCallouts : null);
 
   return (
     <Screen header={<TopBar onBack={() => router.back()} title="Accountability" />}>
@@ -202,7 +202,7 @@ export default function AccountabilityScreen() {
         <Button kind="secondary" label={paused ? 'Resume callouts' : 'Pause until midnight'} onPress={togglePause} />
       </Section>
 
-      <ApiKeySection />
+      <AiSection />
     </Screen>
   );
 }

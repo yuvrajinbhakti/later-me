@@ -1,17 +1,5 @@
-import {
-  ROADMAP_MODEL,
-  ROADMAP_TOOL,
-  RoadmapError,
-  buildRoadmapRequest,
-  describeFailure,
-  failureForStatus,
-  hasDraftSteps,
-  isPlausibleApiKey,
-  maskApiKey,
-  parseRoadmapResponse,
-  roadmapBudget,
-  type RoadmapFailure,
-} from '../roadmap';
+import { AI_MODEL, AiError, type AiFailure } from '../ai';
+import { ROADMAP_TOOL, buildRoadmapRequest, hasDraftSteps, parseRoadmapResponse, roadmapBudget } from '../roadmap';
 
 const TODAY = new Date(2026, 8, 26, 15, 30);
 const input = { title: 'Run a half marathon', why: 'Prove I can finish things', targetDate: '2026-12-19', hoursPerWeek: 5 };
@@ -24,12 +12,12 @@ const toolReply = (toolInput: unknown, extra: Record<string, unknown> = {}) => (
   ...extra,
 });
 
-const failure = (fn: () => unknown): RoadmapFailure | null => {
+const failure = (fn: () => unknown): AiFailure | null => {
   try {
     fn();
     return null;
   } catch (e) {
-    return e instanceof RoadmapError ? e.failure : null;
+    return e instanceof AiError ? e.failure : null;
   }
 };
 
@@ -44,7 +32,7 @@ describe('roadmapBudget', () => {
 describe('buildRoadmapRequest', () => {
   it('asks the roadmap model and forces the roadmap tool', () => {
     const req = buildRoadmapRequest(input, TODAY);
-    expect(req.model).toBe(ROADMAP_MODEL);
+    expect(req.model).toBe(AI_MODEL);
     expect(req.tool_choice).toEqual({ type: 'tool', name: ROADMAP_TOOL });
     expect(req.tools.map((t) => t.name)).toEqual([ROADMAP_TOOL]);
   });
@@ -121,36 +109,6 @@ describe('parseRoadmapResponse', () => {
     ['a missing milestones list', toolReply({ note: 'hi' })],
     ['not an object at all', null],
   ])('rejects a reply with %s', (_, body) => expect(failure(() => parseRoadmapResponse(body))).toBe('bad-response'));
-});
-
-describe('failures', () => {
-  it.each([
-    [401, 'bad-key'],
-    [403, 'bad-key'],
-    [429, 'rate-limit'],
-    [500, 'overloaded'],
-    [529, 'overloaded'],
-    [400, 'rejected'],
-    [404, 'rejected'],
-  ] as const)('HTTP %i is %s', (status, expected) => expect(failureForStatus(status)).toBe(expected));
-
-  it('passes the API reason through for rejected requests', () =>
-    expect(describeFailure('rejected', 'Your credit balance is too low.')).toContain('Your credit balance is too low.'));
-
-  it.each(['bad-key', 'rate-limit', 'overloaded', 'network', 'timeout', 'bad-response', 'rejected'] as const)(
-    'has a message for %s',
-    (f) => expect(describeFailure(f).length).toBeGreaterThan(10),
-  );
-});
-
-describe('API keys', () => {
-  it('accepts Anthropic keys, ignoring pasted whitespace', () =>
-    expect(isPlausibleApiKey('  sk-ant-api03-abcdefghijklmnopqrstuvwxyz \n')).toBe(true));
-
-  it.each(['', 'sk-abc', 'sk-ant-', 'hello world'])('rejects %p', (key) => expect(isPlausibleApiKey(key)).toBe(false));
-
-  it('masks all but the prefix and last four characters', () =>
-    expect(maskApiKey('sk-ant-api03-abcdefghijklmnopqrstuvwxyz')).toBe('sk-ant-…wxyz'));
 });
 
 describe('hasDraftSteps', () => {

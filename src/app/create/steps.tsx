@@ -2,9 +2,10 @@ import { router } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { useApiKey } from '../../ai/apiKey';
-import { requestRoadmap } from '../../ai/roadmapClient';
+import { requestRoadmap } from '../../ai/claude';
 import { createQuest, makeId, validateDraft } from '../../domain/quests';
-import { RoadmapError, hasDraftSteps } from '../../domain/roadmap';
+import { AiError } from '../../domain/ai';
+import { hasDraftSteps } from '../../domain/roadmap';
 import { blankMilestone, useDraft, type DraftMilestone } from '../../features/create/DraftContext';
 import { useAppStore } from '../../store/AppStore';
 import { Button } from '../../ui/Button';
@@ -60,7 +61,7 @@ export default function DefineStepsScreen() {
       setAiNote(roadmap.note);
     } catch (e) {
       if (controller.signal.aborted) return;
-      setAiError(e instanceof RoadmapError ? e.message : 'Something went wrong. Try again.');
+      setAiError(e instanceof AiError ? e.message : 'Something went wrong. Try again.');
     } finally {
       if (!controller.signal.aborted) setDrafting(false);
     }
